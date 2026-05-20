@@ -13,7 +13,8 @@ import { attachCliConflictBanner } from '../components/cli-conflict-banner.js'
 import { icon } from '../lib/icons.js'
 
 let _unsubGw = null
-let _loadInFlight = false
+/** 串行化仪表盘加载：fullRefresh 曾绕过 in-flight 检查，可与首屏加载并发，双写配置竞态。 */
+let _dashboardLoadChain = Promise.resolve()
 let _lastGwChangeLoad = 0
 let _detachCliConflict = null
 
@@ -197,12 +198,12 @@ function normalizeDefaultModelConfig(config) {
   return modelConfig.primary
 }
 
-async function loadDashboardData(page, fullRefresh = false) {
-  // 并发保护：如果上一次加载仍在进行，跳过本次（fullRefresh 除外）
-  if (_loadInFlight && !fullRefresh) return
-  const loadSeq = ++_dashboardLoadSeq
-  _loadInFlight = true
-  try { await _loadDashboardDataInner(page, fullRefresh, loadSeq) } finally { if (loadSeq === _dashboardLoadSeq) _loadInFlight = false }
+function loadDashboardData(page, fullRefresh = false) {
+  _dashboardLoadChain = _dashboardLoadChain.catch(() => {}).then(async () => {
+    const loadSeq = ++_dashboardLoadSeq
+    await _loadDashboardDataInner(page, fullRefresh, loadSeq)
+  })
+  return _dashboardLoadChain
 }
 
 async function _loadDashboardDataInner(page, fullRefresh, loadSeq) {
