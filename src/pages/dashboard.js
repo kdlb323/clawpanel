@@ -193,6 +193,13 @@ function normalizeDefaultModelConfig(config) {
   for (const fallback of modelConfig.fallbacks) {
     nextMap[fallback] = currentMap[fallback] && typeof currentMap[fallback] === 'object' && !Array.isArray(currentMap[fallback]) ? currentMap[fallback] : {}
   }
+  // 与 models.js normalizeDefaultModelMap 一致：保留「不在主模型/备选链里」但仍挂在 providers 下的模型的 defaults.models 条目，
+  // 避免仪表板自愈写盘时静默丢掉 CLI/导入流程写入的 per-model 配置。
+  for (const [key, value] of Object.entries(currentMap)) {
+    if (validModels.has(key) && !nextMap[key]) {
+      nextMap[key] = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+    }
+  }
   config.agents.defaults.models = nextMap
   return modelConfig.primary
 }
