@@ -80,6 +80,28 @@ fn insert_array_as_csv(form: &mut Map<String, Value>, source: &Value, key: &str)
     }
 }
 
+fn insert_access_policy_form_values(
+    form: &mut Map<String, Value>,
+    source: &Value,
+    telegram_compat: bool,
+    mention_compat: bool,
+) {
+    insert_string_if_present(form, source, "dmPolicy");
+    insert_string_if_present(form, source, "groupPolicy");
+    if mention_compat
+        && form.get("groupPolicy").and_then(|v| v.as_str()) == Some("open")
+        && source.get("requireMention").and_then(|v| v.as_bool()) == Some(true)
+    {
+        form.insert("groupPolicy".into(), Value::String("mentioned".into()));
+    }
+    insert_array_as_csv(form, source, "allowFrom");
+    if telegram_compat {
+        if let Some(v) = form.get("allowFrom").cloned() {
+            form.insert("allowedUsers".into(), v);
+        }
+    }
+}
+
 fn csv_to_json_array(raw: &str) -> Option<Value> {
     let items = raw
         .split(&[',', '\n', ';'][..])
@@ -91,6 +113,32 @@ fn csv_to_json_array(raw: &str) -> Option<Value> {
         None
     } else {
         Some(Value::Array(items))
+    }
+}
+
+fn json_array_from_csv_value(value: Option<&Value>) -> Vec<Value> {
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|v| {
+                if let Some(s) = v.as_str() {
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(Value::String(trimmed.to_string()))
+                    }
+                } else if v.is_number() || v.is_boolean() {
+                    Some(Value::String(v.to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        Some(Value::String(raw)) => csv_to_json_array(raw)
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default(),
+        _ => vec![],
     }
 }
 
@@ -114,10 +162,159 @@ fn put_bool_from_form(entry: &mut Map<String, Value>, key: &str, raw: &str) {
     }
 }
 
-fn put_csv_array_from_form(entry: &mut Map<String, Value>, key: &str, raw: &str) {
-    if let Some(v) = csv_to_json_array(raw) {
-        entry.insert(key.into(), v);
+fn put_bool_value_if_present(entry: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
+    match value {
+        Some(Value::Bool(v)) => {
+            entry.insert(key.into(), Value::Bool(*v));
+        }
+        Some(Value::String(raw)) => put_bool_from_form(entry, key, raw),
+        _ => {}
     }
+}
+
+fn put_array_from_form_value(entry: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
+    let items = json_array_from_csv_value(value);
+    if !items.is_empty() {
+        entry.insert(key.into(), Value::Array(items));
+    }
+}
+
+fn normalize_dm_policy_value(raw: Option<&Value>, fallback: &str) -> String {
+    let value = raw.and_then(|v| v.as_str()).unwrap_or("").trim();
+    match value {
+        "" => fallback.to_string(),
+        "allow" | "open" => "open".into(),
+        "deny" | "disabled" => "disabled".into(),
+        "pairing" => "pairing".into(),
+        "allowlist" => "allowlist".into(),
+        _ => fallback.to_string(),
+    }
+}
+
+fn normalize_group_policy_value(raw: Option<&Value>, fallback: &str) -> String {
+    let value = raw.and_then(|v| v.as_str()).unwrap_or("").trim();
+    match value {
+        "" => fallback.to_string(),
+        "all" | "mentioned" | "open" => "open".into(),
+        "deny" | "disabled" => "disabled".into(),
+        "allowlist" => "allowlist".into(),
+        _ => fallback.to_string(),
+    }
+}
+
+fn platform_supports_top_level_require_mention(platform: &str) -> bool {
+    matches!(
+        platform_storage_key(platform),
+        "feishu" | "slack" | "msteams"
+    )
+}
+
+fn normalize_messaging_platform_form(
+    platform: &str,
+    form: &Map<String, Value>,
+) -> Map<String, Value> {
+    let storage_key = platform_storage_key(platform);
+    let mut normalized = form.clone();
+
+    if !normalized.contains_key("allowFrom") {
+        if let Some(v) = normalized.get("allowedUsers").cloned() {
+            normalized.insert("allowFrom".into(), v);
+        }
+    }
+
+    let needs_access_defaults = matches!(
+        storage_key,
+        "telegram" | "discord" | "feishu" | "slack" | "signal" | "msteams" | "whatsapp"
+    );
+    let has_dm_field = normalized.contains_key("dmPolicy") || needs_access_defaults;
+    let has_group_field = normalized.contains_key("groupPolicy") || needs_access_defaults;
+
+    if has_dm_field {
+        let dm_policy = normalize_dm_policy_value(normalized.get("dmPolicy"), "pairing");
+        normalized.insert("dmPolicy".into(), Value::String(dm_policy.clone()));
+        if normalized.contains_key("allowFrom") {
+            let items = json_array_from_csv_value(normalized.get("allowFrom"));
+            normalized.insert("allowFrom".into(), Value::Array(items));
+        }
+        if dm_policy == "open" {
+            let mut items = json_array_from_csv_value(normalized.get("allowFrom"));
+            if !items.iter().any(|v| v.as_str() == Some("*")) {
+                items.push(Value::String("*".into()));
+            }
+            normalized.insert("allowFrom".into(), Value::Array(items));
+        }
+    } else if normalized.contains_key("allowFrom") {
+        let items = json_array_from_csv_value(normalized.get("allowFrom"));
+        normalized.insert("allowFrom".into(), Value::Array(items));
+    }
+
+    if has_group_field {
+        let requested_group_policy = normalized
+            .get("groupPolicy")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let group_policy = normalize_group_policy_value(normalized.get("groupPolicy"), "allowlist");
+        normalized.insert("groupPolicy".into(), Value::String(group_policy));
+        if requested_group_policy == "mentioned"
+            && platform_supports_top_level_require_mention(storage_key)
+        {
+            normalized.insert("requireMention".into(), Value::Bool(true));
+        } else if requested_group_policy != "mentioned" {
+            if platform_supports_top_level_require_mention(storage_key) {
+                normalized.insert("requireMention".into(), Value::Bool(false));
+            } else if normalized.contains_key("requireMention") {
+                let value = match normalized.get("requireMention") {
+                    Some(Value::Bool(v)) => *v,
+                    Some(Value::String(s)) => bool_from_form_value(s).unwrap_or(false),
+                    _ => false,
+                };
+                normalized.insert("requireMention".into(), Value::Bool(value));
+            }
+        }
+    }
+
+    if storage_key == "feishu" {
+        let domain = normalized
+            .get("domain")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        normalized.insert(
+            "domain".into(),
+            Value::String(if domain.is_empty() { "feishu" } else { domain }.into()),
+        );
+        normalized
+            .entry("connectionMode")
+            .or_insert(Value::String("websocket".into()));
+        normalized
+            .entry("webhookPath")
+            .or_insert(Value::String("/feishu/events".into()));
+        normalized
+            .entry("reactionNotifications")
+            .or_insert(Value::String("off".into()));
+        normalized
+            .entry("typingIndicator")
+            .or_insert(Value::Bool(true));
+        normalized
+            .entry("resolveSenderNames")
+            .or_insert(Value::Bool(true));
+    }
+
+    if storage_key == "slack" {
+        normalized
+            .entry("mode")
+            .or_insert(Value::String("socket".into()));
+        normalized
+            .entry("webhookPath")
+            .or_insert(Value::String("/slack/events".into()));
+        normalized
+            .entry("userTokenReadOnly")
+            .or_insert(Value::Bool(false));
+    }
+
+    normalized
 }
 
 /// 合并渠道配置：将新的表单字段覆盖到现有配置上，保留用户通过 CLI 或手动编辑的自定义字段。
@@ -327,6 +524,7 @@ pub async fn read_platform_config(
             if let Some(t) = saved.get("token").and_then(|v| v.as_str()) {
                 form.insert("token".into(), Value::String(t.into()));
             }
+            insert_access_policy_form_values(&mut form, &saved, false, false);
             if let Some(guilds) = saved.get("guilds").and_then(|v| v.as_object()) {
                 if let Some(gid) = guilds.keys().next() {
                     form.insert("guildId".into(), Value::String(gid.clone()));
@@ -349,10 +547,7 @@ pub async fn read_platform_config(
             if let Some(t) = saved.get("botToken").and_then(|v| v.as_str()) {
                 form.insert("botToken".into(), Value::String(t.into()));
             }
-            if let Some(arr) = saved.get("allowFrom").and_then(|v| v.as_array()) {
-                let users: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
-                form.insert("allowedUsers".into(), Value::String(users.join(", ")));
-            }
+            insert_access_policy_form_values(&mut form, &saved, true, false);
         }
         "qqbot" => {
             // 多账号：读 accounts.<account_id>；单账号：先读 qqbot 根节点，若无凭证再读 accounts.default（与官方 CLI 一致）
@@ -475,34 +670,72 @@ pub async fn read_platform_config(
             if let Some(ref acct) = account_id {
                 if !acct.is_empty() {
                     // 从 channel root 补 shared fields
+                    let mut shared_source = saved.clone();
                     if let Some(ch_root) = channel_root {
+                        if let (Some(target), Some(root)) =
+                            (shared_source.as_object_mut(), ch_root.as_object())
+                        {
+                            for key in &[
+                                "domain",
+                                "connectionMode",
+                                "webhookPath",
+                                "dmPolicy",
+                                "groupPolicy",
+                                "allowFrom",
+                                "reactionNotifications",
+                                "typingIndicator",
+                                "resolveSenderNames",
+                                "requireMention",
+                                "textChunkLimit",
+                                "mediaMaxMb",
+                            ] {
+                                if let Some(v) = root.get(*key) {
+                                    target.insert(key.to_string(), v.clone());
+                                }
+                            }
+                        }
+                    }
+                    {
                         for key in &[
                             "domain",
                             "connectionMode",
-                            "dmPolicy",
-                            "groupPolicy",
+                            "webhookPath",
                             "groupAllowFrom",
                             "groups",
+                            "reactionNotifications",
                             "streaming",
                             "blockStreaming",
-                            "typingIndicator",
-                            "resolveSenderNames",
                             "textChunkLimit",
                             "mediaMaxMb",
                         ] {
-                            if let Some(v) = ch_root.get(*key) {
+                            if let Some(v) = shared_source.get(*key) {
                                 if !v.is_null() {
                                     form.insert(key.to_string(), v.clone());
                                 }
                             }
                         }
+                        insert_access_policy_form_values(&mut form, &shared_source, false, true);
+                        insert_bool_as_string(&mut form, &shared_source, "typingIndicator");
+                        insert_bool_as_string(&mut form, &shared_source, "resolveSenderNames");
+                        insert_bool_as_string(&mut form, &shared_source, "requireMention");
                     }
                 }
             } else {
                 // 无账号：直接从 root 读 shared fields
-                if let Some(v) = saved.get("domain").and_then(|v| v.as_str()) {
-                    form.insert("domain".into(), Value::String(v.into()));
+                for key in &[
+                    "domain",
+                    "connectionMode",
+                    "webhookPath",
+                    "reactionNotifications",
+                    "textChunkLimit",
+                    "mediaMaxMb",
+                ] {
+                    insert_string_if_present(&mut form, &saved, key);
                 }
+                insert_access_policy_form_values(&mut form, &saved, false, true);
+                insert_bool_as_string(&mut form, &saved, "typingIndicator");
+                insert_bool_as_string(&mut form, &saved, "resolveSenderNames");
+                insert_bool_as_string(&mut form, &saved, "requireMention");
             }
         }
         "dingtalk" | "dingtalk-connector" => {
@@ -543,14 +776,12 @@ pub async fn read_platform_config(
             insert_string_if_present(&mut form, &saved, "teamId");
             insert_string_if_present(&mut form, &saved, "appId");
             insert_string_if_present(&mut form, &saved, "socketMode");
-            insert_string_if_present(&mut form, &saved, "dmPolicy");
-            insert_string_if_present(&mut form, &saved, "groupPolicy");
-            insert_array_as_csv(&mut form, &saved, "allowFrom");
+            insert_access_policy_form_values(&mut form, &saved, false, true);
+            insert_bool_as_string(&mut form, &saved, "userTokenReadOnly");
+            insert_bool_as_string(&mut form, &saved, "requireMention");
         }
         "whatsapp" => {
-            insert_string_if_present(&mut form, &saved, "dmPolicy");
-            insert_string_if_present(&mut form, &saved, "groupPolicy");
-            insert_array_as_csv(&mut form, &saved, "allowFrom");
+            insert_access_policy_form_values(&mut form, &saved, false, false);
             insert_bool_as_string(&mut form, &saved, "enabled");
         }
         "signal" => {
@@ -559,9 +790,7 @@ pub async fn read_platform_config(
             insert_string_if_present(&mut form, &saved, "httpUrl");
             insert_string_if_present(&mut form, &saved, "httpHost");
             insert_string_if_present(&mut form, &saved, "httpPort");
-            insert_string_if_present(&mut form, &saved, "dmPolicy");
-            insert_string_if_present(&mut form, &saved, "groupPolicy");
-            insert_array_as_csv(&mut form, &saved, "allowFrom");
+            insert_access_policy_form_values(&mut form, &saved, false, false);
         }
         "matrix" => {
             insert_string_if_present(&mut form, &saved, "homeserver");
@@ -569,10 +798,8 @@ pub async fn read_platform_config(
             insert_string_if_present(&mut form, &saved, "userId");
             insert_string_if_present(&mut form, &saved, "password");
             insert_string_if_present(&mut form, &saved, "deviceId");
-            insert_string_if_present(&mut form, &saved, "dmPolicy");
-            insert_string_if_present(&mut form, &saved, "groupPolicy");
+            insert_access_policy_form_values(&mut form, &saved, false, false);
             insert_bool_as_string(&mut form, &saved, "e2ee");
-            insert_array_as_csv(&mut form, &saved, "allowFrom");
             if saved.get("accessToken").and_then(|v| v.as_str()).is_some() {
                 form.insert("authMode".into(), Value::String("token".into()));
             } else if saved.get("userId").and_then(|v| v.as_str()).is_some()
@@ -587,9 +814,8 @@ pub async fn read_platform_config(
             insert_string_if_present(&mut form, &saved, "tenantId");
             insert_string_if_present(&mut form, &saved, "botEndpoint");
             insert_string_if_present(&mut form, &saved, "webhookPath");
-            insert_string_if_present(&mut form, &saved, "dmPolicy");
-            insert_string_if_present(&mut form, &saved, "groupPolicy");
-            insert_array_as_csv(&mut form, &saved, "allowFrom");
+            insert_access_policy_form_values(&mut form, &saved, false, true);
+            insert_bool_as_string(&mut form, &saved, "requireMention");
         }
         _ => {
             if saved.is_null() {
@@ -641,7 +867,9 @@ pub async fn save_messaging_platform(
         .or_insert_with(|| json!({}));
     let channels_map = channels.as_object_mut().ok_or("channels 节点格式错误")?;
 
-    let form_obj = form.as_object().ok_or("表单数据格式错误")?;
+    let raw_form_obj = form.as_object().ok_or("表单数据格式错误")?;
+    let normalized_form = normalize_messaging_platform_form(&platform, raw_form_obj);
+    let form_obj = &normalized_form;
 
     // 用于后续创建 bindings 的平台信息
     let saved_account_id = account_id.clone();
@@ -655,6 +883,13 @@ pub async fn save_messaging_platform(
                 entry.insert("token".into(), Value::String(t.trim().into()));
             }
             entry.insert("enabled".into(), Value::Bool(true));
+            put_string(&mut entry, "dmPolicy", form_string(form_obj, "dmPolicy"));
+            put_string(
+                &mut entry,
+                "groupPolicy",
+                form_string(form_obj, "groupPolicy"),
+            );
+            put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
 
             // guildId + channelId 展开为 guilds 嵌套结构
             let guild_id = form_obj
@@ -711,19 +946,13 @@ pub async fn save_messaging_platform(
                 entry.insert("botToken".into(), Value::String(t.trim().into()));
             }
             entry.insert("enabled".into(), Value::Bool(true));
-
-            // allowedUsers 逗号字符串 → allowFrom 数组
-            if let Some(users_str) = form_obj.get("allowedUsers").and_then(|v| v.as_str()) {
-                let users: Vec<Value> = users_str
-                    .split(',')
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| Value::String(s.into()))
-                    .collect();
-                if !users.is_empty() {
-                    entry.insert("allowFrom".into(), Value::Array(users));
-                }
-            }
+            put_string(&mut entry, "dmPolicy", form_string(form_obj, "dmPolicy"));
+            put_string(
+                &mut entry,
+                "groupPolicy",
+                form_string(form_obj, "groupPolicy"),
+            );
+            put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
 
             merge_channel_entry(channels_map, "telegram", entry);
         }
@@ -805,17 +1034,40 @@ pub async fn save_messaging_platform(
             entry.insert("appId".into(), Value::String(app_id));
             entry.insert("appSecret".into(), Value::String(app_secret));
             entry.insert("enabled".into(), Value::Bool(true));
-            entry.insert("connectionMode".into(), Value::String("websocket".into()));
-
-            let domain = form_obj
-                .get("domain")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if !domain.is_empty() {
-                entry.insert("domain".into(), Value::String(domain));
-            }
+            put_string(
+                &mut entry,
+                "connectionMode",
+                form_string(form_obj, "connectionMode"),
+            );
+            put_string(&mut entry, "domain", form_string(form_obj, "domain"));
+            put_string(
+                &mut entry,
+                "webhookPath",
+                form_string(form_obj, "webhookPath"),
+            );
+            put_string(&mut entry, "dmPolicy", form_string(form_obj, "dmPolicy"));
+            put_string(
+                &mut entry,
+                "groupPolicy",
+                form_string(form_obj, "groupPolicy"),
+            );
+            put_string(
+                &mut entry,
+                "reactionNotifications",
+                form_string(form_obj, "reactionNotifications"),
+            );
+            put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
+            put_bool_value_if_present(
+                &mut entry,
+                "typingIndicator",
+                form_obj.get("typingIndicator"),
+            );
+            put_bool_value_if_present(
+                &mut entry,
+                "resolveSenderNames",
+                form_obj.get("resolveSenderNames"),
+            );
+            put_bool_value_if_present(&mut entry, "requireMention", form_obj.get("requireMention"));
 
             // 多账号模式：写入 channels.<storage_key>.accounts.<account_id>
             if let Some(ref acct) = account_id {
@@ -926,13 +1178,19 @@ pub async fn save_messaging_platform(
             );
             put_string(&mut entry, "teamId", form_string(form_obj, "teamId"));
             put_string(&mut entry, "appId", form_string(form_obj, "appId"));
+            put_bool_value_if_present(
+                &mut entry,
+                "userTokenReadOnly",
+                form_obj.get("userTokenReadOnly"),
+            );
+            put_bool_value_if_present(&mut entry, "requireMention", form_obj.get("requireMention"));
             put_string(&mut entry, "dmPolicy", form_string(form_obj, "dmPolicy"));
             put_string(
                 &mut entry,
                 "groupPolicy",
                 form_string(form_obj, "groupPolicy"),
             );
-            put_csv_array_from_form(&mut entry, "allowFrom", &form_string(form_obj, "allowFrom"));
+            put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
             merge_channel_entry(channels_map, &storage_key, entry);
         }
         "whatsapp" => {
@@ -944,7 +1202,7 @@ pub async fn save_messaging_platform(
                 "groupPolicy",
                 form_string(form_obj, "groupPolicy"),
             );
-            put_csv_array_from_form(&mut entry, "allowFrom", &form_string(form_obj, "allowFrom"));
+            put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
             put_bool_from_form(&mut entry, "enabled", &form_string(form_obj, "enabled"));
             merge_channel_entry(channels_map, &storage_key, entry);
         }
@@ -967,7 +1225,7 @@ pub async fn save_messaging_platform(
                 "groupPolicy",
                 form_string(form_obj, "groupPolicy"),
             );
-            put_csv_array_from_form(&mut entry, "allowFrom", &form_string(form_obj, "allowFrom"));
+            put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
             merge_channel_entry(channels_map, &storage_key, entry);
         }
         "matrix" => {
@@ -997,7 +1255,7 @@ pub async fn save_messaging_platform(
                 form_string(form_obj, "groupPolicy"),
             );
             put_bool_from_form(&mut entry, "e2ee", &form_string(form_obj, "e2ee"));
-            put_csv_array_from_form(&mut entry, "allowFrom", &form_string(form_obj, "allowFrom"));
+            put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
             merge_channel_entry(channels_map, &storage_key, entry);
             ensure_plugin_allowed(&mut cfg, "matrix")?;
         }
@@ -1029,7 +1287,8 @@ pub async fn save_messaging_platform(
                 "groupPolicy",
                 form_string(form_obj, "groupPolicy"),
             );
-            put_csv_array_from_form(&mut entry, "allowFrom", &form_string(form_obj, "allowFrom"));
+            put_bool_value_if_present(&mut entry, "requireMention", form_obj.get("requireMention"));
+            put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
             merge_channel_entry(channels_map, &storage_key, entry);
             ensure_plugin_allowed(&mut cfg, "msteams")?;
         }
@@ -3858,5 +4117,161 @@ async fn verify_dingtalk(
             "valid": false,
             "errors": [msg]
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_channel_form_adds_telegram_access_defaults() {
+        let form = json!({
+            "botToken": "123:token"
+        });
+        let normalized =
+            normalize_messaging_platform_form("telegram", form.as_object().expect("object"));
+
+        assert_eq!(
+            normalized.get("botToken").and_then(|v| v.as_str()),
+            Some("123:token")
+        );
+        assert_eq!(
+            normalized.get("dmPolicy").and_then(|v| v.as_str()),
+            Some("pairing")
+        );
+        assert_eq!(
+            normalized.get("groupPolicy").and_then(|v| v.as_str()),
+            Some("allowlist")
+        );
+    }
+
+    #[test]
+    fn normalize_channel_form_converts_legacy_ui_policy_values() {
+        let form = json!({
+            "mode": "socket",
+            "botToken": "xoxb-token",
+            "appToken": "xapp-token",
+            "dmPolicy": "allow",
+            "groupPolicy": "mentioned"
+        });
+        let normalized =
+            normalize_messaging_platform_form("slack", form.as_object().expect("object"));
+
+        assert_eq!(
+            normalized.get("dmPolicy").and_then(|v| v.as_str()),
+            Some("open")
+        );
+        assert_eq!(
+            normalized
+                .get("allowFrom")
+                .and_then(|v| v.as_array())
+                .cloned(),
+            Some(vec![Value::String("*".into())])
+        );
+        assert_eq!(
+            normalized.get("groupPolicy").and_then(|v| v.as_str()),
+            Some("open")
+        );
+        assert_eq!(
+            normalized.get("requireMention").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            normalized.get("webhookPath").and_then(|v| v.as_str()),
+            Some("/slack/events")
+        );
+        assert_eq!(
+            normalized
+                .get("userTokenReadOnly")
+                .and_then(|v| v.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn normalize_channel_form_avoids_unsupported_top_level_require_mention() {
+        let form = json!({
+            "account": "+15551234567",
+            "dmPolicy": "deny",
+            "groupPolicy": "mentioned"
+        });
+        let normalized =
+            normalize_messaging_platform_form("signal", form.as_object().expect("object"));
+
+        assert_eq!(
+            normalized.get("dmPolicy").and_then(|v| v.as_str()),
+            Some("disabled")
+        );
+        assert_eq!(
+            normalized.get("groupPolicy").and_then(|v| v.as_str()),
+            Some("open")
+        );
+        assert!(!normalized.contains_key("requireMention"));
+    }
+
+    #[test]
+    fn normalize_channel_form_adds_feishu_required_defaults() {
+        let form = json!({
+            "appId": "cli_a",
+            "appSecret": "secret",
+            "domain": ""
+        });
+        let normalized =
+            normalize_messaging_platform_form("feishu", form.as_object().expect("object"));
+
+        assert_eq!(
+            normalized.get("domain").and_then(|v| v.as_str()),
+            Some("feishu")
+        );
+        assert_eq!(
+            normalized.get("connectionMode").and_then(|v| v.as_str()),
+            Some("websocket")
+        );
+        assert_eq!(
+            normalized.get("webhookPath").and_then(|v| v.as_str()),
+            Some("/feishu/events")
+        );
+        assert_eq!(
+            normalized.get("dmPolicy").and_then(|v| v.as_str()),
+            Some("pairing")
+        );
+        assert_eq!(
+            normalized.get("groupPolicy").and_then(|v| v.as_str()),
+            Some("allowlist")
+        );
+        assert_eq!(
+            normalized
+                .get("reactionNotifications")
+                .and_then(|v| v.as_str()),
+            Some("off")
+        );
+        assert_eq!(
+            normalized.get("typingIndicator").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            normalized
+                .get("resolveSenderNames")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn channel_form_readback_preserves_mention_policy_choice() {
+        let saved = json!({
+            "groupPolicy": "open",
+            "requireMention": true,
+            "allowFrom": ["U123"]
+        });
+        let mut form = Map::new();
+        insert_access_policy_form_values(&mut form, &saved, false, true);
+
+        assert_eq!(
+            form.get("groupPolicy").and_then(|v| v.as_str()),
+            Some("mentioned")
+        );
+        assert_eq!(form.get("allowFrom").and_then(|v| v.as_str()), Some("U123"));
     }
 }

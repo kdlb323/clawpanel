@@ -20,6 +20,22 @@ import {
 
 // ── 渠道注册表：面板内置向导，覆盖 OpenClaw 官方渠道 + 国内扩展渠道 ──
 
+const DM_POLICY_OPTIONS = [
+  { value: '', label: t('channels.policyDefault') },
+  { value: 'pairing', label: t('channels.dmPairing') },
+  { value: 'open', label: t('channels.dmOpen') },
+  { value: 'allowlist', label: t('channels.dmAllowlist') },
+  { value: 'disabled', label: t('channels.dmDisabled') },
+]
+
+const GROUP_POLICY_OPTIONS = (allLabel, { mention = false } = {}) => [
+  { value: '', label: t('channels.policyDefault') },
+  { value: 'open', label: allLabel },
+  ...(mention ? [{ value: 'mentioned', label: t('channels.groupMentionOnly') }] : []),
+  { value: 'allowlist', label: t('channels.groupAllowlist') },
+  { value: 'disabled', label: t('channels.groupDisabled') },
+]
+
 const PLATFORM_REGISTRY = {
   qqbot: {
     label: t('channels.qqbotLabel'),
@@ -81,11 +97,14 @@ const PLATFORM_REGISTRY = {
       {
         key: 'domain', label: t('channels.feishuDomainLabel'), type: 'select',
         options: [
-          { value: '', label: t('channels.feishuDomainFeishu') },
+          { value: 'feishu', label: t('channels.feishuDomainFeishu') },
           { value: 'lark', label: t('channels.feishuDomainLark') },
         ],
         required: false,
       },
+      { key: 'dmPolicy', label: t('channels.dmPolicy'), type: 'select', options: DM_POLICY_OPTIONS, required: false },
+      { key: 'groupPolicy', label: t('channels.groupPolicy'), type: 'select', options: GROUP_POLICY_OPTIONS(t('channels.groupAllGroups'), { mention: true }), required: false },
+      { key: 'allowFrom', label: 'Allow From', placeholder: t('channels.allowFromPh'), required: false, hint: t('channels.allowFromHint') },
     ],
     pluginRequired: '@larksuite/openclaw-lark@latest',
     pluginId: 'openclaw-lark',
@@ -104,6 +123,9 @@ const PLATFORM_REGISTRY = {
     guideFooter: t('channels.telegramGuideFooter'),
     fields: [
       { key: 'botToken', label: 'Bot Token', placeholder: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11', secret: true, required: true },
+      { key: 'dmPolicy', label: t('channels.dmPolicy'), type: 'select', options: DM_POLICY_OPTIONS, required: false },
+      { key: 'groupPolicy', label: t('channels.groupPolicy'), type: 'select', options: GROUP_POLICY_OPTIONS(t('channels.groupAllGroups')), required: false },
+      { key: 'allowFrom', label: 'Allow From', placeholder: t('channels.allowFromPh'), required: false, hint: t('channels.allowFromHint') },
     ],
     configKey: 'telegram',
     pairingChannel: 'telegram',
@@ -121,6 +143,9 @@ const PLATFORM_REGISTRY = {
     guideFooter: t('channels.discordGuideFooter'),
     fields: [
       { key: 'token', label: 'Bot Token', placeholder: 'MTExxxxxxxxx.Gxxxxxx.xxxxxxxx', secret: true, required: true },
+      { key: 'dmPolicy', label: t('channels.dmPolicy'), type: 'select', options: DM_POLICY_OPTIONS, required: false },
+      { key: 'groupPolicy', label: t('channels.groupPolicy'), type: 'select', options: GROUP_POLICY_OPTIONS(t('channels.groupAllChannels')), required: false },
+      { key: 'allowFrom', label: 'Allow From', placeholder: t('channels.allowFromPh'), required: false, hint: t('channels.allowFromHint') },
     ],
     configKey: 'discord',
     pairingChannel: 'discord',
@@ -150,8 +175,8 @@ const PLATFORM_REGISTRY = {
       { key: 'signingSecret', label: 'Signing Secret', placeholder: t('channels.slackSigningSecretPh'), secret: true, requiredWhen: { mode: 'http' }, hint: t('channels.slackSigningSecretHint') },
       { key: 'teamId', label: 'Team ID', placeholder: t('channels.slackTeamIdPh'), required: false },
       { key: 'webhookPath', label: 'Webhook Path', placeholder: t('channels.slackWebhookPathPh'), required: false },
-      { key: 'dmPolicy', label: t('channels.dmPolicy'), type: 'select', options: [{ value: '', label: t('channels.policyDefault') }, { value: 'allow', label: t('channels.dmAllow') }, { value: 'deny', label: t('channels.dmDeny') }], required: false },
-      { key: 'groupPolicy', label: t('channels.groupPolicy'), type: 'select', options: [{ value: '', label: t('channels.policyDefault') }, { value: 'all', label: t('channels.groupAllChannels') }, { value: 'mentioned', label: t('channels.groupMentionOnly') }, { value: 'allowlist', label: t('channels.groupAllowlist') }], required: false },
+      { key: 'dmPolicy', label: t('channels.dmPolicy'), type: 'select', options: DM_POLICY_OPTIONS, required: false },
+      { key: 'groupPolicy', label: t('channels.groupPolicy'), type: 'select', options: GROUP_POLICY_OPTIONS(t('channels.groupAllChannels'), { mention: true }), required: false },
       { key: 'allowFrom', label: 'Allow From', placeholder: t('channels.allowFromPh'), required: false, hint: t('channels.allowFromHint') },
     ],
     configKey: 'slack',
@@ -196,8 +221,8 @@ const PLATFORM_REGISTRY = {
       { key: 'tenantId', label: 'Tenant ID', placeholder: t('channels.msteamsTenantIdPh'), required: false },
       { key: 'botEndpoint', label: 'Bot Endpoint', placeholder: 'https://example.com/api/teams/messages', required: false },
       { key: 'webhookPath', label: 'Webhook Path', placeholder: '/msteams/messages', required: false },
-      { key: 'dmPolicy', label: t('channels.dmPolicy'), type: 'select', options: [{ value: '', label: t('channels.policyDefault') }, { value: 'allow', label: t('channels.dmAllow') }, { value: 'deny', label: t('channels.dmDeny') }], required: false },
-      { key: 'groupPolicy', label: t('channels.groupPolicy'), type: 'select', options: [{ value: '', label: t('channels.policyDefault') }, { value: 'all', label: t('channels.groupAllTeams') }, { value: 'mentioned', label: t('channels.groupMentionOnly') }, { value: 'allowlist', label: t('channels.groupAllowlist') }], required: false },
+      { key: 'dmPolicy', label: t('channels.dmPolicy'), type: 'select', options: DM_POLICY_OPTIONS, required: false },
+      { key: 'groupPolicy', label: t('channels.groupPolicy'), type: 'select', options: GROUP_POLICY_OPTIONS(t('channels.groupAllTeams'), { mention: true }), required: false },
       { key: 'allowFrom', label: 'Allow From', placeholder: t('channels.msteamsAllowFromPh'), required: false },
     ],
     configKey: 'msteams',
@@ -220,8 +245,8 @@ const PLATFORM_REGISTRY = {
       { key: 'httpUrl', label: 'HTTP URL', placeholder: t('channels.optionalEg', { example: 'http://127.0.0.1:8080' }), required: false },
       { key: 'httpHost', label: 'HTTP Host', placeholder: t('channels.optionalEg', { example: '127.0.0.1' }), required: false },
       { key: 'httpPort', label: 'HTTP Port', placeholder: t('channels.optionalEg', { example: '8080' }), required: false },
-      { key: 'dmPolicy', label: t('channels.dmPolicy'), type: 'select', options: [{ value: '', label: t('channels.policyDefault') }, { value: 'allow', label: t('channels.dmAllow') }, { value: 'deny', label: t('channels.dmDeny') }], required: false },
-      { key: 'groupPolicy', label: t('channels.groupPolicy'), type: 'select', options: [{ value: '', label: t('channels.policyDefault') }, { value: 'all', label: t('channels.groupAllGroups') }, { value: 'mentioned', label: t('channels.groupMentionBot') }, { value: 'allowlist', label: t('channels.groupAllowlist') }], required: false },
+      { key: 'dmPolicy', label: t('channels.dmPolicy'), type: 'select', options: DM_POLICY_OPTIONS, required: false },
+      { key: 'groupPolicy', label: t('channels.groupPolicy'), type: 'select', options: GROUP_POLICY_OPTIONS(t('channels.groupAllGroups')), required: false },
       { key: 'allowFrom', label: 'Allow From', placeholder: t('channels.signalAllowFromPh'), required: false },
     ],
     configKey: 'signal',
@@ -243,8 +268,8 @@ const PLATFORM_REGISTRY = {
       { key: 'password', label: 'Password', placeholder: t('channels.matrixPasswordPh'), secret: true, required: false },
       { key: 'deviceId', label: 'Device ID', placeholder: t('channels.optionalEg', { example: 'CLAWPANEL' }), required: false },
       { key: 'e2ee', label: 'E2EE', type: 'select', options: [{ value: '', label: t('channels.policyDefault') }, { value: 'true', label: t('channels.enable') }, { value: 'false', label: t('channels.disable') }], required: false },
-      { key: 'dmPolicy', label: t('channels.dmPolicy'), type: 'select', options: [{ value: '', label: t('channels.policyDefault') }, { value: 'allow', label: t('channels.dmAllow') }, { value: 'deny', label: t('channels.dmDeny') }], required: false },
-      { key: 'groupPolicy', label: t('channels.groupPolicy'), type: 'select', options: [{ value: '', label: t('channels.policyDefault') }, { value: 'all', label: t('channels.groupAllRooms') }, { value: 'mentioned', label: t('channels.groupMentionBot') }, { value: 'allowlist', label: t('channels.groupAllowlist') }], required: false },
+      { key: 'dmPolicy', label: t('channels.dmPolicy'), type: 'select', options: DM_POLICY_OPTIONS, required: false },
+      { key: 'groupPolicy', label: t('channels.groupPolicy'), type: 'select', options: GROUP_POLICY_OPTIONS(t('channels.groupAllRooms')), required: false },
       { key: 'allowFrom', label: 'Allow From', placeholder: t('channels.matrixAllowFromPh'), required: false },
     ],
     configKey: 'matrix',

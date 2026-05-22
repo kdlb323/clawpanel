@@ -2386,6 +2386,219 @@ function platformBindingChannel(platform) {
   return platformListId(storageKey)
 }
 
+function csvToStringArray(raw) {
+  if (Array.isArray(raw)) return raw.map(item => String(item).trim()).filter(Boolean)
+  if (typeof raw !== 'string') return []
+  return raw.split(/[,;\n]/).map(item => item.trim()).filter(Boolean)
+}
+
+function normalizeDmPolicy(raw, fallback = 'pairing') {
+  const value = String(raw || '').trim()
+  if (!value) return fallback
+  if (value === 'allow') return 'open'
+  if (value === 'deny') return 'disabled'
+  if (['pairing', 'allowlist', 'open', 'disabled'].includes(value)) return value
+  return fallback
+}
+
+function normalizeGroupPolicy(raw, fallback = 'allowlist') {
+  const value = String(raw || '').trim()
+  if (!value) return fallback
+  if (value === 'all') return 'open'
+  if (value === 'mentioned') return 'open'
+  if (value === 'deny') return 'disabled'
+  if (['open', 'allowlist', 'disabled'].includes(value)) return value
+  return fallback
+}
+
+function putWildcardAllowFromWhenOpen(entry, previousAllowFrom) {
+  if (entry.dmPolicy !== 'open') return
+  const allowFrom = csvToStringArray(previousAllowFrom)
+  if (!allowFrom.includes('*')) allowFrom.push('*')
+  entry.allowFrom = allowFrom
+}
+
+function platformSupportsTopLevelRequireMention(platform) {
+  return ['feishu', 'slack', 'msteams'].includes(platformStorageKey(platform))
+}
+
+export function normalizeMessagingPlatformForm(platform, form = {}) {
+  const storageKey = platformStorageKey(platform)
+  const normalized = { ...(form || {}) }
+  if (!Object.hasOwn(normalized, 'allowFrom') && Object.hasOwn(normalized, 'allowedUsers')) {
+    normalized.allowFrom = normalized.allowedUsers
+  }
+  const needsAccessDefaults = ['telegram', 'discord', 'feishu', 'slack', 'signal', 'msteams', 'whatsapp'].includes(storageKey)
+  const hasDmField = Object.hasOwn(normalized, 'dmPolicy') || needsAccessDefaults
+  const hasGroupField = Object.hasOwn(normalized, 'groupPolicy') || needsAccessDefaults
+
+  if (hasDmField) {
+    normalized.dmPolicy = normalizeDmPolicy(normalized.dmPolicy)
+    if (Object.hasOwn(normalized, 'allowFrom')) normalized.allowFrom = csvToStringArray(normalized.allowFrom)
+    putWildcardAllowFromWhenOpen(normalized, normalized.allowFrom)
+  } else if (Object.hasOwn(normalized, 'allowFrom')) {
+    normalized.allowFrom = csvToStringArray(normalized.allowFrom)
+  }
+
+  if (hasGroupField) {
+    const requestedGroupPolicy = String(normalized.groupPolicy || '').trim()
+    normalized.groupPolicy = normalizeGroupPolicy(requestedGroupPolicy)
+    if (requestedGroupPolicy === 'mentioned' && platformSupportsTopLevelRequireMention(storageKey)) {
+      normalized.requireMention = true
+    } else if (requestedGroupPolicy !== 'mentioned') {
+      if (platformSupportsTopLevelRequireMention(storageKey)) {
+        normalized.requireMention = false
+      } else if (Object.hasOwn(normalized, 'requireMention')) {
+        normalized.requireMention = normalized.requireMention === true || normalized.requireMention === 'true'
+      }
+    }
+  }
+
+  if (storageKey === 'feishu') {
+    normalized.domain = String(normalized.domain || '').trim() || 'feishu'
+    normalized.connectionMode = normalized.connectionMode || 'websocket'
+    normalized.webhookPath = normalized.webhookPath || '/feishu/events'
+    normalized.reactionNotifications = normalized.reactionNotifications || 'off'
+    if (!Object.hasOwn(normalized, 'typingIndicator')) normalized.typingIndicator = true
+    if (!Object.hasOwn(normalized, 'resolveSenderNames')) normalized.resolveSenderNames = true
+  }
+
+  if (storageKey === 'slack') {
+    normalized.mode = normalized.mode || 'socket'
+    normalized.webhookPath = normalized.webhookPath || '/slack/events'
+    if (!Object.hasOwn(normalized, 'userTokenReadOnly')) normalized.userTokenReadOnly = false
+  }
+
+  return normalized
+}
+
+function csvForForm(raw) {
+  return csvToStringArray(raw).join(', ')
+}
+
+function putStringFormValue(form, source, key) {
+  if (typeof source?.[key] === 'string') form[key] = source[key]
+}
+
+function putBoolFormValue(form, source, key) {
+  if (typeof source?.[key] === 'boolean') form[key] = source[key] ? 'true' : 'false'
+}
+
+function putCsvFormValue(form, source, key) {
+  const value = csvForForm(source?.[key])
+  if (value) form[key] = value
+}
+
+function putAccessPolicyFormValues(form, source, { telegramCompat = false, mentionCompat = false } = {}) {
+  putStringFormValue(form, source, 'dmPolicy')
+  putStringFormValue(form, source, 'groupPolicy')
+  if (mentionCompat && form.groupPolicy === 'open' && source?.requireMention === true) {
+    form.groupPolicy = 'mentioned'
+  }
+  putCsvFormValue(form, source, 'allowFrom')
+  if (telegramCompat && form.allowFrom) form.allowedUsers = form.allowFrom
+}
+
+export function buildMessagingPlatformFormValues(platform, saved = {}, options = {}) {
+  if (!saved || typeof saved !== 'object') return {}
+  const form = {}
+  const storageKey = platformStorageKey(platform)
+
+  if (storageKey === 'telegram') {
+    putStringFormValue(form, saved, 'botToken')
+    putAccessPolicyFormValues(form, saved, { telegramCompat: true })
+    return form
+  }
+
+  if (storageKey === 'discord') {
+    putStringFormValue(form, saved, 'token')
+    putAccessPolicyFormValues(form, saved)
+    const guilds = saved.guilds && typeof saved.guilds === 'object' ? saved.guilds : null
+    const guildId = guilds ? Object.keys(guilds)[0] : ''
+    if (guildId) {
+      form.guildId = guildId
+      const channels = guilds[guildId]?.channels && typeof guilds[guildId].channels === 'object'
+        ? guilds[guildId].channels
+        : null
+      const channelId = channels ? Object.keys(channels).find(id => id !== '*') : ''
+      if (channelId) form.channelId = channelId
+    }
+    return form
+  }
+
+  if (storageKey === 'feishu') {
+    putStringFormValue(form, saved, 'appId')
+    putStringFormValue(form, saved, 'appSecret')
+    const shared = options.channelRoot && typeof options.channelRoot === 'object'
+      ? { ...saved, ...options.channelRoot }
+      : saved
+    for (const key of ['domain', 'connectionMode', 'webhookPath', 'reactionNotifications', 'textChunkLimit', 'mediaMaxMb']) {
+      putStringFormValue(form, shared, key)
+    }
+    putAccessPolicyFormValues(form, shared, { mentionCompat: true })
+    putBoolFormValue(form, shared, 'typingIndicator')
+    putBoolFormValue(form, shared, 'resolveSenderNames')
+    putBoolFormValue(form, shared, 'requireMention')
+    return form
+  }
+
+  if (storageKey === 'slack') {
+    for (const key of ['mode', 'botToken', 'appToken', 'signingSecret', 'webhookPath', 'teamId', 'appId', 'socketMode']) {
+      putStringFormValue(form, saved, key)
+    }
+    putAccessPolicyFormValues(form, saved, { mentionCompat: true })
+    putBoolFormValue(form, saved, 'userTokenReadOnly')
+    putBoolFormValue(form, saved, 'requireMention')
+    return form
+  }
+
+  if (storageKey === 'whatsapp') {
+    putAccessPolicyFormValues(form, saved, { mentionCompat: true })
+    putBoolFormValue(form, saved, 'enabled')
+    return form
+  }
+
+  if (storageKey === 'signal') {
+    for (const key of ['account', 'cliPath', 'httpUrl', 'httpHost', 'httpPort']) {
+      putStringFormValue(form, saved, key)
+    }
+    putAccessPolicyFormValues(form, saved)
+    return form
+  }
+
+  if (storageKey === 'matrix') {
+    for (const key of ['homeserver', 'accessToken', 'userId', 'password', 'deviceId']) {
+      putStringFormValue(form, saved, key)
+    }
+    putAccessPolicyFormValues(form, saved)
+    putBoolFormValue(form, saved, 'e2ee')
+    if (form.accessToken) form.authMode = 'token'
+    else if (form.userId || form.password) form.authMode = 'password'
+    return form
+  }
+
+  if (storageKey === 'msteams') {
+    for (const key of ['appId', 'appPassword', 'tenantId', 'botEndpoint', 'webhookPath']) {
+      putStringFormValue(form, saved, key)
+    }
+    putAccessPolicyFormValues(form, saved)
+    putBoolFormValue(form, saved, 'requireMention')
+    return form
+  }
+
+  for (const [key, value] of Object.entries(saved)) {
+    if (key === 'enabled' || key === 'accounts') continue
+    if (typeof value === 'string') form[key] = value
+    else if (Array.isArray(value)) {
+      const csv = csvForForm(value)
+      if (csv) form[key] = csv
+    } else if (typeof value === 'boolean') {
+      form[key] = value ? 'true' : 'false'
+    }
+  }
+  return form
+}
+
 function channelHasQqbotCredentials(entry) {
   return !!(entry && typeof entry === 'object' && (entry.appId || entry.clientSecret || entry.appSecret || entry.token))
 }
@@ -3872,21 +4085,8 @@ const handlers = {
       if (!appId && !clientSecret) return { exists: false }
       if (appId) form.appId = appId
       if (clientSecret) form.clientSecret = clientSecret
-    } else if (platform === 'telegram') {
-      if (saved.botToken) form.botToken = saved.botToken
-      if (saved.allowFrom) form.allowedUsers = saved.allowFrom.join(', ')
-    } else if (platform === 'discord') {
-      if (saved.token) form.token = saved.token
-      const gid = saved.guilds && Object.keys(saved.guilds)[0]
-      if (gid) form.guildId = gid
-    } else if (platform === 'feishu') {
-      if (saved.appId) form.appId = saved.appId
-      if (saved.appSecret) form.appSecret = saved.appSecret
-      if (saved.domain) form.domain = saved.domain
     } else {
-      for (const [k, v] of Object.entries(saved)) {
-        if (k !== 'enabled' && k !== 'accounts' && typeof v === 'string') form[k] = v
-      }
+      Object.assign(form, buildMessagingPlatformFormValues(platform, saved, { channelRoot }))
     }
     return { exists: true, values: form }
   },
@@ -3894,6 +4094,7 @@ const handlers = {
   save_messaging_platform({ platform, form, accountId }) {
     if (!fs.existsSync(CONFIG_PATH)) throw new Error('openclaw.json 不存在')
     const cfg = readOpenclawConfigRequired()
+    form = normalizeMessagingPlatformForm(platform, form || {})
     if (!cfg.channels) cfg.channels = {}
     const storageKey = platformStorageKey(platform)
     const normalizedAccountId = typeof accountId === 'string' ? accountId.trim() : ''
@@ -3936,9 +4137,14 @@ const handlers = {
       cfg.channels.qqbot = current
     } else if (platform === 'telegram') {
       entry.botToken = form.botToken
-      if (form.allowedUsers) entry.allowFrom = form.allowedUsers.split(',').map(s => s.trim()).filter(Boolean)
+      entry.dmPolicy = form.dmPolicy
+      entry.groupPolicy = form.groupPolicy
+      if (Array.isArray(form.allowFrom) && form.allowFrom.length) entry.allowFrom = form.allowFrom
     } else if (platform === 'discord') {
       entry.token = form.token
+      entry.dmPolicy = form.dmPolicy
+      entry.groupPolicy = form.groupPolicy
+      if (Array.isArray(form.allowFrom) && form.allowFrom.length) entry.allowFrom = form.allowFrom
       if (form.guildId) {
         const ck = form.channelId || '*'
         entry.guilds = { [form.guildId]: { users: ['*'], requireMention: true, channels: { [ck]: { allow: true, requireMention: true } } } }
@@ -3947,7 +4153,15 @@ const handlers = {
       entry.appId = form.appId
       entry.appSecret = form.appSecret
       entry.connectionMode = 'websocket'
-      if (form.domain) entry.domain = form.domain
+      entry.domain = form.domain
+      entry.webhookPath = form.webhookPath
+      entry.dmPolicy = form.dmPolicy
+      entry.groupPolicy = form.groupPolicy
+      if (Array.isArray(form.allowFrom) && form.allowFrom.length) entry.allowFrom = form.allowFrom
+      if (Object.hasOwn(form, 'requireMention')) entry.requireMention = !!form.requireMention
+      entry.reactionNotifications = form.reactionNotifications
+      entry.typingIndicator = form.typingIndicator
+      entry.resolveSenderNames = form.resolveSenderNames
       if (normalizedAccountId) {
         setAccountChannelEntry(entry)
       } else {
