@@ -119,6 +119,22 @@ function dedupeOpenclawInstallations(list = []) {
   return [...map.values()]
 }
 
+function isCliMissingError(err) {
+  const message = String(err?.message || err || '')
+  return message.includes('openclaw CLI 未安装') || message.includes('CLI 未安装')
+}
+
+async function handleGatewayStartError(page, err, fallbackText) {
+  if (isForeignGatewayError(err)) {
+    await openGatewayConflict(page, err)
+    return
+  }
+  toast(humanizeError(err, fallbackText), isCliMissingError(err) ? 'warning' : 'error')
+  if (isCliMissingError(err)) {
+    await showInstallationCleanup({ onRefresh: () => loadDashboardData(page, true) })
+  }
+}
+
 let _dashboardInitialized = false
 let _dashboardVersionCache = null
 let _dashboardStatusSummaryCache = null
@@ -760,8 +776,7 @@ function bindActions(page) {
         toast(t('dashboard.gwStartSent'), 'success')
         setTimeout(() => loadDashboardData(page), 2000)
       } catch (err) {
-        if (isForeignGatewayError(err)) await openGatewayConflict(page, err)
-        else toast(t('dashboard.startFail') + ': ' + err, 'error')
+        await handleGatewayStartError(page, err, t('dashboard.startFail'))
       }
       finally { actionBtn.disabled = false; actionBtn.textContent = t('dashboard.startBtn') }
     }
@@ -784,8 +799,7 @@ function bindActions(page) {
         toast(t('dashboard.gwRestartSent'), 'success')
         setTimeout(() => loadDashboardData(page), 3000)
       } catch (err) {
-        if (isForeignGatewayError(err)) await openGatewayConflict(page, err)
-        else toast(t('dashboard.restartFail') + ': ' + err, 'error')
+        await handleGatewayStartError(page, err, t('dashboard.restartFail'))
       }
       finally { actionBtn.disabled = false; actionBtn.textContent = t('dashboard.restartBtn') }
     }
@@ -798,8 +812,7 @@ function bindActions(page) {
     try {
       await api.restartService('ai.openclaw.gateway')
     } catch (e) {
-      if (isForeignGatewayError(e)) await openGatewayConflict(page, e)
-      else toast(humanizeError(e, t('dashboard.restartFail')), 'error')
+      await handleGatewayStartError(page, e, t('dashboard.restartFail'))
       btnRestart.disabled = false
       btnRestart.classList.remove('btn-loading')
       btnRestart.textContent = t('dashboard.restartGw')

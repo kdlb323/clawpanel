@@ -7,6 +7,18 @@
 
 ## [未发布]
 
+## [0.16.5] - 2026-05-22
+
+### 修复 (Fixes)
+
+- **兼容已有 OpenClaw 安装** — Windows 桌面端自动发现范围扩展到 npm 全局目录、standalone 目录、常见 OpenClaw / Node 安装目录、`where openclaw` 结果，并支持 `openclaw.exe` / `openclaw.js` 入口，避免 Gateway 已运行但重启时报 “openclaw CLI 未安装”
+- **已有安装导入引导** — Dashboard 启动 / 重启 Gateway 遇到 CLI 未绑定时，会打开已有 OpenClaw 安装绑定弹窗，不再只显示失败提示
+- **Web 模式候选路径补齐** — Web 后端 CLI 发现同步补充 `openclaw.exe` 候选，保持桌面端与 Web 端行为一致
+
+### 测试与验证 (Testing)
+
+- **回归验证** — 已通过 `npm run build`、`node --test tests\*.test.js`、`cargo fmt --check`、`cargo check`、`cargo clippy --all-targets -- -D warnings`、`git diff --check`
+
 ## [0.16.4] - 2026-05-22
 
 ### 修复 (Fixes)

@@ -585,6 +585,7 @@ function collectPreferredCliCandidates() {
     if (!trimmed) continue
     if (isWindows) {
       addCliCandidate(candidates, seen, path.join(trimmed, 'openclaw.cmd'))
+      addCliCandidate(candidates, seen, path.join(trimmed, 'openclaw.exe'))
       addCliCandidate(candidates, seen, path.join(trimmed, 'openclaw'))
     } else {
       addCliCandidate(candidates, seen, path.join(trimmed, 'openclaw'))

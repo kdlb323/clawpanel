@@ -2496,11 +2496,36 @@ fn scan_all_installations(
             try_add(prefix_path.join("openclaw"));
         }
         if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+            let localappdata_path = std::path::PathBuf::from(&localappdata);
             try_add(
-                std::path::PathBuf::from(&localappdata)
+                localappdata_path
+                    .join("Programs")
+                    .join("OpenClaw")
+                    .join("openclaw.exe"),
+            );
+            try_add(localappdata_path.join("OpenClaw").join("openclaw.cmd"));
+            try_add(localappdata_path.join("OpenClaw").join("openclaw.exe"));
+            try_add(
+                localappdata_path
                     .join("Programs")
                     .join("nodejs")
                     .join("openclaw.cmd"),
+            );
+            try_add(
+                localappdata_path
+                    .join("Programs")
+                    .join("nodejs")
+                    .join("openclaw.exe"),
+            );
+            try_add(
+                localappdata_path
+                    .join("Programs")
+                    .join("nodejs")
+                    .join("node_modules")
+                    .join("@qingchencloud")
+                    .join("openclaw-zh")
+                    .join("bin")
+                    .join("openclaw.js"),
             );
         }
         if let Ok(program_files) = std::env::var("ProgramFiles") {
@@ -2607,6 +2632,15 @@ fn scan_all_installations(
         #[cfg(target_os = "windows")]
         {
             try_add(base.join("openclaw.cmd"));
+            try_add(base.join("openclaw.exe"));
+            try_add(base.join("openclaw"));
+            try_add(
+                base.join("node_modules")
+                    .join("@qingchencloud")
+                    .join("openclaw-zh")
+                    .join("bin")
+                    .join("openclaw.js"),
+            );
         }
         #[cfg(not(target_os = "windows"))]
         {
