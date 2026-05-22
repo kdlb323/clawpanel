@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 
 import {
   buildMessagingPlatformFormValues,
+  listPlatformAccounts,
+  resolveMessagingCredentialValueForSave,
   normalizeMessagingPlatformForm,
 } from '../scripts/dev-api.js'
 
@@ -158,4 +160,67 @@ test('渠道保存会在用户改回所有群组时显式清除仅提及开关',
 
   assert.equal(form.groupPolicy, 'open')
   assert.equal(form.requireMention, false)
+})
+
+test('渠道读取会把 SecretRef 密钥显示为安全占位并携带原始对象', () => {
+  const secretRef = { source: 'env', provider: 'default', id: 'TELEGRAM_BOT_TOKEN' }
+  const values = buildMessagingPlatformFormValues('telegram', {
+    botToken: secretRef,
+    dmPolicy: 'pairing',
+    groupPolicy: 'allowlist',
+  })
+
+  assert.equal(values.botToken, 'SecretRef(env:default:TELEGRAM_BOT_TOKEN)')
+  assert.deepEqual(values.__secretRefs, { botToken: secretRef })
+})
+
+test('渠道保存时用户未改动 SecretRef 占位会保留原始密钥引用', () => {
+  const secretRef = { source: 'env', provider: 'default', id: 'SLACK_BOT_TOKEN' }
+  const value = resolveMessagingCredentialValueForSave({
+    form: { botToken: 'SecretRef(env:default:SLACK_BOT_TOKEN)' },
+    current: { botToken: secretRef },
+    key: 'botToken',
+  })
+
+  assert.deepEqual(value, secretRef)
+})
+
+test('渠道保存时用户输入新密钥会替换旧 SecretRef', () => {
+  const secretRef = { source: 'env', provider: 'default', id: 'DISCORD_BOT_TOKEN' }
+  const value = resolveMessagingCredentialValueForSave({
+    form: { token: 'new-discord-token' },
+    current: { token: secretRef },
+    key: 'token',
+  })
+
+  assert.equal(value, 'new-discord-token')
+})
+
+test('渠道账号列表会把 SecretRef 标识显示为安全占位', () => {
+  const accounts = listPlatformAccounts({
+    accounts: {
+      prod: {
+        appId: { source: 'env', provider: 'default', id: 'FEISHU_APP_ID' },
+      },
+      backup: {
+        clientId: { source: 'env', provider: 'default', id: 'DINGTALK_CLIENT_ID' },
+      },
+    },
+  })
+
+  assert.deepEqual(accounts, [
+    { accountId: 'backup', appId: 'SecretRef(env:default:DINGTALK_CLIENT_ID)' },
+    { accountId: 'prod', appId: 'SecretRef(env:default:FEISHU_APP_ID)' },
+  ])
+})
+
+test('渠道保存时 clientId 未改动 SecretRef 占位会保留原始引用', () => {
+  const secretRef = { source: 'env', provider: 'default', id: 'DINGTALK_CLIENT_ID' }
+  const value = resolveMessagingCredentialValueForSave({
+    form: { clientId: 'SecretRef(env:default:DINGTALK_CLIENT_ID)' },
+    current: { clientId: secretRef },
+    key: 'clientId',
+  })
+
+  assert.deepEqual(value, secretRef)
 })

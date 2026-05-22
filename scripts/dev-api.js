@@ -1610,7 +1610,10 @@ function readPanelConfig() {
   }
   try {
     if (fs.existsSync(PANEL_CONFIG_PATH)) {
-      _panelConfigCache = JSON.parse(fs.readFileSync(PANEL_CONFIG_PATH, 'utf8'))
+      _panelConfigCache = readJsonFileRelaxed(PANEL_CONFIG_PATH)
+      if (!_panelConfigCache || typeof _panelConfigCache !== 'object' || Array.isArray(_panelConfigCache)) {
+        throw new Error('clawpanel.json 格式错误')
+      }
       _panelConfigCacheTime = now
       applyOpenclawPathConfig(_panelConfigCache)
       return JSON.parse(JSON.stringify(_panelConfigCache))
@@ -1885,7 +1888,7 @@ function generateCalibrationToken() {
   return `cp-${crypto.randomBytes(16).toString('hex')}`
 }
 
-function decodeJsonFileContent(filePath) {
+export function decodeJsonFileContent(filePath) {
   const raw = fs.readFileSync(filePath)
   if (raw.length >= 3 && raw[0] === 0xEF && raw[1] === 0xBB && raw[2] === 0xBF) {
     return raw.subarray(3).toString('utf8')
@@ -1893,7 +1896,7 @@ function decodeJsonFileContent(filePath) {
   return raw.toString('utf8')
 }
 
-function readJsonFileRelaxed(filePath) {
+export function readJsonFileRelaxed(filePath) {
   if (!fs.existsSync(filePath)) return null
   try {
     return JSON.parse(decodeJsonFileContent(filePath))
@@ -2182,7 +2185,7 @@ function wsReadLoop(socket, onMessage, timeoutMs = DOCKER_TASK_TIMEOUT_MS) {
 
 function patchGatewayOrigins() {
   if (!fs.existsSync(CONFIG_PATH)) return false
-  const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
+  const config = readOpenclawConfigRequired()
   const origins = requiredControlUiOrigins()
   const existing = config?.gateway?.controlUi?.allowedOrigins || []
   // 合并：保留用户已有的 origins，只追加 ClawPanel 需要的
@@ -2198,12 +2201,18 @@ function patchGatewayOrigins() {
 
 function readOpenclawConfigOptional() {
   if (!fs.existsSync(CONFIG_PATH)) return {}
-  return cleanLoadedConfig(JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')))
+  const config = readJsonFileRelaxed(CONFIG_PATH)
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return {}
+  return cleanLoadedConfig(config)
 }
 
 function readOpenclawConfigRequired() {
   if (!fs.existsSync(CONFIG_PATH)) throw new Error('openclaw.json 不存在')
-  return cleanLoadedConfig(JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')))
+  const config = readJsonFileRelaxed(CONFIG_PATH)
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('openclaw.json 格式错误')
+  }
+  return cleanLoadedConfig(config)
 }
 
 function mergeConfigsPreservingFields(existing, next) {
@@ -2500,19 +2509,90 @@ function putAccessPolicyFormValues(form, source, { telegramCompat = false, menti
   if (telegramCompat && form.allowFrom) form.allowedUsers = form.allowFrom
 }
 
+function normalizeSecretRef(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const source = String(value.source || '').trim()
+  if (!['env', 'file', 'exec'].includes(source)) return null
+  const provider = String(value.provider || 'default').trim() || 'default'
+  const id = String(value.id || '').trim()
+  if (!id) return null
+  return { source, provider, id }
+}
+
+function formatSecretRefPlaceholder(ref) {
+  const normalized = normalizeSecretRef(ref)
+  if (!normalized) return ''
+  return `SecretRef(${normalized.source}:${normalized.provider}:${normalized.id})`
+}
+
+function putSecretAwareFormValue(form, source, key) {
+  if (typeof source?.[key] === 'string') {
+    form[key] = source[key]
+    return
+  }
+  const ref = normalizeSecretRef(source?.[key])
+  if (!ref) return
+  form[key] = formatSecretRefPlaceholder(ref)
+  form.__secretRefs = {
+    ...(form.__secretRefs || {}),
+    [key]: ref,
+  }
+}
+
+export function resolveMessagingCredentialValueForSave({ form = {}, current = {}, key }) {
+  const rawValue = form?.[key]
+  if (typeof rawValue !== 'string') return rawValue
+  const value = rawValue.trim()
+  const currentRef = normalizeSecretRef(current?.[key])
+  if (currentRef && (!value || value === formatSecretRefPlaceholder(currentRef))) {
+    return currentRef
+  }
+  return value || undefined
+}
+
+const MESSAGING_CREDENTIAL_FIELDS = [
+  'accessToken',
+  'appId',
+  'appPassword',
+  'appSecret',
+  'appToken',
+  'botToken',
+  'clientId',
+  'clientSecret',
+  'gatewayPassword',
+  'gatewayToken',
+  'password',
+  'signingSecret',
+  'token',
+]
+
+function preserveMessagingCredentialRefs(entry, form, current) {
+  delete entry.__secretRefs
+  for (const key of MESSAGING_CREDENTIAL_FIELDS) {
+    if (!Object.hasOwn(form || {}, key)) continue
+    const value = resolveMessagingCredentialValueForSave({ form, current, key })
+    if (value === undefined) {
+      delete entry[key]
+    } else {
+      entry[key] = value
+    }
+  }
+  return entry
+}
+
 export function buildMessagingPlatformFormValues(platform, saved = {}, options = {}) {
   if (!saved || typeof saved !== 'object') return {}
   const form = {}
   const storageKey = platformStorageKey(platform)
 
   if (storageKey === 'telegram') {
-    putStringFormValue(form, saved, 'botToken')
+    putSecretAwareFormValue(form, saved, 'botToken')
     putAccessPolicyFormValues(form, saved, { telegramCompat: true })
     return form
   }
 
   if (storageKey === 'discord') {
-    putStringFormValue(form, saved, 'token')
+    putSecretAwareFormValue(form, saved, 'token')
     putAccessPolicyFormValues(form, saved)
     const guilds = saved.guilds && typeof saved.guilds === 'object' ? saved.guilds : null
     const guildId = guilds ? Object.keys(guilds)[0] : ''
@@ -2528,8 +2608,8 @@ export function buildMessagingPlatformFormValues(platform, saved = {}, options =
   }
 
   if (storageKey === 'feishu') {
-    putStringFormValue(form, saved, 'appId')
-    putStringFormValue(form, saved, 'appSecret')
+    putSecretAwareFormValue(form, saved, 'appId')
+    putSecretAwareFormValue(form, saved, 'appSecret')
     const shared = options.channelRoot && typeof options.channelRoot === 'object'
       ? { ...saved, ...options.channelRoot }
       : saved
@@ -2545,7 +2625,7 @@ export function buildMessagingPlatformFormValues(platform, saved = {}, options =
 
   if (storageKey === 'slack') {
     for (const key of ['mode', 'botToken', 'appToken', 'signingSecret', 'webhookPath', 'teamId', 'appId', 'socketMode']) {
-      putStringFormValue(form, saved, key)
+      putSecretAwareFormValue(form, saved, key)
     }
     putAccessPolicyFormValues(form, saved, { mentionCompat: true })
     putBoolFormValue(form, saved, 'userTokenReadOnly')
@@ -2561,7 +2641,7 @@ export function buildMessagingPlatformFormValues(platform, saved = {}, options =
 
   if (storageKey === 'signal') {
     for (const key of ['account', 'cliPath', 'httpUrl', 'httpHost', 'httpPort']) {
-      putStringFormValue(form, saved, key)
+      putSecretAwareFormValue(form, saved, key)
     }
     putAccessPolicyFormValues(form, saved)
     return form
@@ -2569,7 +2649,7 @@ export function buildMessagingPlatformFormValues(platform, saved = {}, options =
 
   if (storageKey === 'matrix') {
     for (const key of ['homeserver', 'accessToken', 'userId', 'password', 'deviceId']) {
-      putStringFormValue(form, saved, key)
+      putSecretAwareFormValue(form, saved, key)
     }
     putAccessPolicyFormValues(form, saved)
     putBoolFormValue(form, saved, 'e2ee')
@@ -2580,7 +2660,7 @@ export function buildMessagingPlatformFormValues(platform, saved = {}, options =
 
   if (storageKey === 'msteams') {
     for (const key of ['appId', 'appPassword', 'tenantId', 'botEndpoint', 'webhookPath']) {
-      putStringFormValue(form, saved, key)
+      putSecretAwareFormValue(form, saved, key)
     }
     putAccessPolicyFormValues(form, saved)
     putBoolFormValue(form, saved, 'requireMention')
@@ -2590,6 +2670,7 @@ export function buildMessagingPlatformFormValues(platform, saved = {}, options =
   for (const [key, value] of Object.entries(saved)) {
     if (key === 'enabled' || key === 'accounts') continue
     if (typeof value === 'string') form[key] = value
+    else if (normalizeSecretRef(value)) putSecretAwareFormValue(form, saved, key)
     else if (Array.isArray(value)) {
       const csv = csvForForm(value)
       if (csv) form[key] = csv
@@ -2850,6 +2931,11 @@ function channelHasQqbotCredentials(entry) {
   return !!(entry && typeof entry === 'object' && (entry.appId || entry.clientSecret || entry.appSecret || entry.token))
 }
 
+function secretAwareAccountDisplayValue(value) {
+  if (typeof value === 'string') return value.trim()
+  return formatSecretRefPlaceholder(value)
+}
+
 function resolvePlatformConfigEntry(channelRoot, platform, accountId) {
   if (!channelRoot || typeof channelRoot !== 'object') return null
   const accountKey = typeof accountId === 'string' ? accountId.trim() : ''
@@ -2860,14 +2946,16 @@ function resolvePlatformConfigEntry(channelRoot, platform, accountId) {
   return channelRoot
 }
 
-function listPlatformAccounts(channelRoot) {
+export function listPlatformAccounts(channelRoot) {
   if (!channelRoot || typeof channelRoot !== 'object' || !channelRoot.accounts || typeof channelRoot.accounts !== 'object') {
     return []
   }
   return Object.entries(channelRoot.accounts)
     .map(([accountId, value]) => {
       const entry = { accountId }
-      const displayId = value?.appId || value?.clientId || value?.account || null
+      const displayId = ['appId', 'clientId', 'account']
+        .map(key => secretAwareAccountDisplayValue(value?.[key]))
+        .find(Boolean)
       if (displayId) entry.appId = displayId
       return entry
     })
@@ -2954,7 +3042,9 @@ function bindingIdentityMatches(binding, agentId, targetMatch) {
 function triggerGatewayReloadNonBlocking(reason) {
   setTimeout(() => {
     try {
-      handlers.reload_gateway()
+      Promise.resolve(handlers.reload_gateway()).catch((e) => {
+        console.warn(`[dev-api] Gateway reload skipped after ${reason}: ${e.message || e}`)
+      })
     } catch (e) {
       console.warn(`[dev-api] Gateway reload skipped after ${reason}: ${e.message || e}`)
     }
@@ -4345,6 +4435,7 @@ const handlers = {
     if (!cfg.channels) cfg.channels = {}
     const storageKey = platformStorageKey(platform)
     const normalizedAccountId = typeof accountId === 'string' ? accountId.trim() : ''
+    const currentSaved = resolvePlatformConfigEntry(cfg.channels?.[storageKey], platform, normalizedAccountId) || {}
     const setRootChannelEntry = (entry) => {
       const current = cfg.channels?.[storageKey]
       // 合并模式：保留用户通过 CLI 或手动编辑的自定义字段（streaming, retry, dmPolicy 等）
@@ -4409,6 +4500,7 @@ const handlers = {
       entry.reactionNotifications = form.reactionNotifications
       entry.typingIndicator = form.typingIndicator
       entry.resolveSenderNames = form.resolveSenderNames
+      preserveMessagingCredentialRefs(entry, form, currentSaved)
       if (normalizedAccountId) {
         setAccountChannelEntry(entry)
       } else {
@@ -4416,6 +4508,7 @@ const handlers = {
       }
     } else if (platform === 'dingtalk' || platform === 'dingtalk-connector') {
       Object.assign(entry, form)
+      preserveMessagingCredentialRefs(entry, form, currentSaved)
       if (normalizedAccountId) {
         setAccountChannelEntry(entry)
       } else {
@@ -4423,10 +4516,12 @@ const handlers = {
       }
     } else {
       Object.assign(entry, form)
+      preserveMessagingCredentialRefs(entry, form, currentSaved)
       setRootChannelEntry(entry)
     }
 
     if (platform !== 'qqbot' && platform !== 'feishu' && platform !== 'dingtalk' && platform !== 'dingtalk-connector') {
+      preserveMessagingCredentialRefs(entry, form, currentSaved)
       // 合并模式：保留用户通过 CLI 或手动编辑的自定义字段
       const existing = cfg.channels[storageKey]
       cfg.channels[storageKey] = (existing && typeof existing === 'object')
@@ -4641,7 +4736,7 @@ const handlers = {
       const output = (result.stdout || '') + (result.stderr || '')
       if (result.status === 0 && output.includes(pid) && output.includes('built-in')) builtin = true
     } catch {}
-    const cfg = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {}
+    const cfg = readOpenclawConfigOptional()
     const allowArr = cfg.plugins?.allow || []
     const allowed = allowArr.includes(pid)
     const enabled = !!cfg.plugins?.entries?.[pid]?.enabled
@@ -6560,13 +6655,13 @@ const handlers = {
 
   // Agent 渠道绑定管理
   list_all_bindings() {
-    const cfg = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {}
+    const cfg = readOpenclawConfigOptional()
     const bindings = cfg.bindings || []
     return { bindings }
   },
 
   get_agent_bindings({ agentId } = {}) {
-    const cfg = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {}
+    const cfg = readOpenclawConfigOptional()
     const all = Array.isArray(cfg.bindings) ? cfg.bindings : []
     const bindings = agentId ? all.filter(b => b?.agentId === agentId) : all
     return { bindings }

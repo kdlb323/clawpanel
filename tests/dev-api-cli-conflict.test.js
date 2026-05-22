@@ -7,7 +7,23 @@ import path from 'node:path'
 import {
   buildOpenclawPathConflictRecords,
   quarantineOpenclawPathForWeb,
+  readJsonFileRelaxed,
 } from '../scripts/dev-api.js'
+
+test('Web API JSON 读取会兼容 UTF-8 BOM', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'clawpanel-json-bom-'))
+  try {
+    const filePath = path.join(tmp, 'openclaw.json')
+    fs.writeFileSync(filePath, Buffer.concat([
+      Buffer.from([0xEF, 0xBB, 0xBF]),
+      Buffer.from(JSON.stringify({ gateway: { port: 18790 } }), 'utf8'),
+    ]))
+
+    assert.deepEqual(readJsonFileRelaxed(filePath), { gateway: { port: 18790 } })
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+})
 
 test('Web API CLI 冲突扫描会返回横幅需要的字段', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'clawpanel-cli-conflict-'))

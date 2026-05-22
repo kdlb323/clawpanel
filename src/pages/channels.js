@@ -1966,6 +1966,11 @@ async function openConfigDialog(pid, page, state, accountId) {
 
   const fieldsHtml = reg.fields.map((f, i) => {
     const val = existing[f.key] || ''
+    const secretRefLocked = existing.__secretRefs?.[f.key]
+    const fieldHint = [
+      f.hint,
+      secretRefLocked ? t('channels.secretRefPreserveHint') : '',
+    ].filter(Boolean).join('<br>')
     if (f.type === 'select' && f.options) {
       return `
         <div class="form-group">
@@ -1986,7 +1991,7 @@ async function openConfigDialog(pid, page, state, accountId) {
                  ${i === 0 ? 'autofocus' : ''} style="flex:1">
           ${f.secret ? `<button type="button" class="btn btn-sm btn-secondary toggle-vis" data-field="${f.key}">${t('channels.show')}</button>` : ''}
         </div>
-        ${f.hint ? `<div class="form-hint">${f.hint}</div>` : ''}
+        ${fieldHint ? `<div class="form-hint">${fieldHint}</div>` : ''}
       </div>
     `
   }).join('')

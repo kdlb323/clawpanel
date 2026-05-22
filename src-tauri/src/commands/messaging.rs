@@ -57,6 +57,111 @@ fn insert_string_if_present(form: &mut Map<String, Value>, source: &Value, key: 
     }
 }
 
+fn secret_ref_parts(value: &Value) -> Option<(&str, &str, &str)> {
+    let obj = value.as_object()?;
+    let source = obj.get("source").and_then(|v| v.as_str())?.trim();
+    if !matches!(source, "env" | "file" | "exec") {
+        return None;
+    }
+    let provider = obj
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("default");
+    let id = obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    Some((source, provider, id))
+}
+
+fn secret_ref_placeholder(value: &Value) -> Option<String> {
+    let (source, provider, id) = secret_ref_parts(value)?;
+    Some(format!("SecretRef({}:{}:{})", source, provider, id))
+}
+
+fn insert_secret_aware_form_value(form: &mut Map<String, Value>, source: &Value, key: &str) {
+    if let Some(v) = source.get(key).and_then(|v| v.as_str()) {
+        form.insert(key.into(), Value::String(v.into()));
+        return;
+    }
+
+    let Some(value) = source.get(key) else {
+        return;
+    };
+    let Some(placeholder) = secret_ref_placeholder(value) else {
+        return;
+    };
+    form.insert(key.into(), Value::String(placeholder));
+    let refs = form
+        .entry("__secretRefs")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(obj) = refs.as_object_mut() {
+        obj.insert(key.into(), value.clone());
+    }
+}
+
+fn resolve_messaging_credential_value_for_save(
+    form_obj: &Map<String, Value>,
+    current: &Value,
+    key: &str,
+) -> Option<Value> {
+    let raw_value = form_obj.get(key)?;
+    let Value::String(raw) = raw_value else {
+        return Some(raw_value.clone());
+    };
+    let value = raw.trim();
+    if let Some(current_value) = current.get(key) {
+        if let Some(placeholder) = secret_ref_placeholder(current_value) {
+            if value.is_empty() || value == placeholder {
+                return Some(current_value.clone());
+            }
+        }
+    }
+    if value.is_empty() {
+        None
+    } else {
+        Some(Value::String(value.to_string()))
+    }
+}
+
+fn preserve_messaging_credential_refs(
+    entry: &mut Map<String, Value>,
+    form_obj: &Map<String, Value>,
+    current: &Value,
+) {
+    entry.remove("__secretRefs");
+    for key in [
+        "accessToken",
+        "appId",
+        "appPassword",
+        "appSecret",
+        "appToken",
+        "botToken",
+        "clientId",
+        "clientSecret",
+        "gatewayPassword",
+        "gatewayToken",
+        "password",
+        "signingSecret",
+        "token",
+    ] {
+        if !form_obj.contains_key(key) {
+            continue;
+        }
+        match resolve_messaging_credential_value_for_save(form_obj, current, key) {
+            Some(value) => {
+                entry.insert(key.into(), value);
+            }
+            None => {
+                entry.remove(key);
+            }
+        }
+    }
+}
+
 fn insert_bool_as_string(form: &mut Map<String, Value>, source: &Value, key: &str) {
     if let Some(v) = source.get(key).and_then(|v| v.as_bool()) {
         form.insert(
@@ -477,6 +582,34 @@ fn gateway_auth_value(cfg: &Value, key: &str) -> Option<String> {
         .map(|v| v.to_string())
 }
 
+fn resolve_platform_config_entry(
+    channel_root: Option<&Value>,
+    platform: &str,
+    account_id: Option<&str>,
+) -> Option<Value> {
+    let root = channel_root?;
+    let account = account_id.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(acct) = account {
+        if let Some(value) = root.get("accounts").and_then(|a| a.get(acct)) {
+            return Some(value.clone());
+        }
+        if platform_storage_key(platform) == "qqbot" && !qqbot_channel_has_credentials(root) {
+            return None;
+        }
+        return Some(root.clone());
+    }
+
+    if platform_storage_key(platform) == "qqbot" && !qqbot_channel_has_credentials(root) {
+        return root
+            .get("accounts")
+            .and_then(|a| a.get(QQBOT_DEFAULT_ACCOUNT_ID))
+            .cloned()
+            .or_else(|| Some(root.clone()));
+    }
+
+    Some(root.clone())
+}
+
 /// 读取指定平台的当前配置（从 openclaw.json 中提取表单可用的值）
 /// account_id: 可选，指定时读取 channels.<platform>.accounts.<account_id>（多账号模式）
 #[tauri::command]
@@ -492,25 +625,8 @@ pub async fn read_platform_config(
     // 多账号模式：读凭证位置
     // 飞书：credentials 可写在 root 或 accounts.<id> 下，优先找非空那个
     let channel_root = cfg.get("channels").and_then(|c| c.get(storage_key));
-    let saved = match (&account_id, channel_root) {
-        // 读指定账号的凭证（accounts.<id>），查不到时再试 root
-        (Some(acct), Some(ch)) if !acct.is_empty() => {
-            ch.get("accounts")
-                .and_then(|a| a.get(acct.as_str()))
-                .cloned()
-                .or_else(|| {
-                    // accountId 指定但该账号不存在 → 尝试读 root（可能是旧格式直接写在 root）
-                    ch.get("appId")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                        .map(|_| ch.clone())
-                })
-                .unwrap_or(Value::Null)
-        }
-        // 无账号：直接读 channel root（单账号场景）
-        (_, Some(ch)) => ch.clone(),
-        _ => Value::Null,
-    };
+    let saved = resolve_platform_config_entry(channel_root, &platform, account_id.as_deref())
+        .unwrap_or(Value::Null);
 
     let exists = !saved.is_null();
 
@@ -521,9 +637,7 @@ pub async fn read_platform_config(
             }
             // Discord 配置在 openclaw.json 中是展开的 guilds 结构
             // 需要反向提取成表单字段：token, guildId, channelId
-            if let Some(t) = saved.get("token").and_then(|v| v.as_str()) {
-                form.insert("token".into(), Value::String(t.into()));
-            }
+            insert_secret_aware_form_value(&mut form, &saved, "token");
             insert_access_policy_form_values(&mut form, &saved, false, false);
             if let Some(guilds) = saved.get("guilds").and_then(|v| v.as_object()) {
                 if let Some(gid) = guilds.keys().next() {
@@ -544,9 +658,7 @@ pub async fn read_platform_config(
                 return Ok(json!({ "exists": false }));
             }
             // Telegram: botToken 直接保存, allowFrom 数组需要拼回逗号字符串
-            if let Some(t) = saved.get("botToken").and_then(|v| v.as_str()) {
-                form.insert("botToken".into(), Value::String(t.into()));
-            }
+            insert_secret_aware_form_value(&mut form, &saved, "botToken");
             insert_access_policy_form_values(&mut form, &saved, true, false);
         }
         "qqbot" => {
@@ -660,12 +772,8 @@ pub async fn read_platform_config(
                 return Ok(json!({ "exists": false }));
             }
             // 飞书凭证：优先从 accounts.<id> 读（多账号），否则从 root 读
-            if let Some(v) = saved.get("appId").and_then(|v| v.as_str()) {
-                form.insert("appId".into(), Value::String(v.into()));
-            }
-            if let Some(v) = saved.get("appSecret").and_then(|v| v.as_str()) {
-                form.insert("appSecret".into(), Value::String(v.into()));
-            }
+            insert_secret_aware_form_value(&mut form, &saved, "appId");
+            insert_secret_aware_form_value(&mut form, &saved, "appSecret");
             // 读 shared fields：优先从 channel root 读（多账号模式下 credentials 在 accounts 下，shared fields 在 root）
             if let Some(ref acct) = account_id {
                 if !acct.is_empty() {
@@ -739,18 +847,10 @@ pub async fn read_platform_config(
             }
         }
         "dingtalk" | "dingtalk-connector" => {
-            if let Some(v) = saved.get("clientId").and_then(|v| v.as_str()) {
-                form.insert("clientId".into(), Value::String(v.into()));
-            }
-            if let Some(v) = saved.get("clientSecret").and_then(|v| v.as_str()) {
-                form.insert("clientSecret".into(), Value::String(v.into()));
-            }
-            if let Some(v) = saved.get("gatewayToken").and_then(|v| v.as_str()) {
-                form.insert("gatewayToken".into(), Value::String(v.into()));
-            }
-            if let Some(v) = saved.get("gatewayPassword").and_then(|v| v.as_str()) {
-                form.insert("gatewayPassword".into(), Value::String(v.into()));
-            }
+            insert_secret_aware_form_value(&mut form, &saved, "clientId");
+            insert_secret_aware_form_value(&mut form, &saved, "clientSecret");
+            insert_secret_aware_form_value(&mut form, &saved, "gatewayToken");
+            insert_secret_aware_form_value(&mut form, &saved, "gatewayPassword");
             match gateway_auth_mode(&cfg) {
                 Some("token") => {
                     if let Some(v) = gateway_auth_value(&cfg, "token") {
@@ -769,9 +869,9 @@ pub async fn read_platform_config(
         }
         "slack" => {
             insert_string_if_present(&mut form, &saved, "mode");
-            insert_string_if_present(&mut form, &saved, "botToken");
-            insert_string_if_present(&mut form, &saved, "appToken");
-            insert_string_if_present(&mut form, &saved, "signingSecret");
+            insert_secret_aware_form_value(&mut form, &saved, "botToken");
+            insert_secret_aware_form_value(&mut form, &saved, "appToken");
+            insert_secret_aware_form_value(&mut form, &saved, "signingSecret");
             insert_string_if_present(&mut form, &saved, "webhookPath");
             insert_string_if_present(&mut form, &saved, "teamId");
             insert_string_if_present(&mut form, &saved, "appId");
@@ -794,9 +894,9 @@ pub async fn read_platform_config(
         }
         "matrix" => {
             insert_string_if_present(&mut form, &saved, "homeserver");
-            insert_string_if_present(&mut form, &saved, "accessToken");
+            insert_secret_aware_form_value(&mut form, &saved, "accessToken");
             insert_string_if_present(&mut form, &saved, "userId");
-            insert_string_if_present(&mut form, &saved, "password");
+            insert_secret_aware_form_value(&mut form, &saved, "password");
             insert_string_if_present(&mut form, &saved, "deviceId");
             insert_access_policy_form_values(&mut form, &saved, false, false);
             insert_bool_as_string(&mut form, &saved, "e2ee");
@@ -809,8 +909,8 @@ pub async fn read_platform_config(
             }
         }
         "msteams" => {
-            insert_string_if_present(&mut form, &saved, "appId");
-            insert_string_if_present(&mut form, &saved, "appPassword");
+            insert_secret_aware_form_value(&mut form, &saved, "appId");
+            insert_secret_aware_form_value(&mut form, &saved, "appPassword");
             insert_string_if_present(&mut form, &saved, "tenantId");
             insert_string_if_present(&mut form, &saved, "botEndpoint");
             insert_string_if_present(&mut form, &saved, "webhookPath");
@@ -827,7 +927,9 @@ pub async fn read_platform_config(
                     if k == "enabled" {
                         continue;
                     }
-                    if let Some(s) = v.as_str() {
+                    if secret_ref_placeholder(v).is_some() {
+                        insert_secret_aware_form_value(&mut form, &saved, k);
+                    } else if let Some(s) = v.as_str() {
                         form.insert(k.clone(), Value::String(s.into()));
                     } else if v.is_array() {
                         insert_array_as_csv(&mut form, &saved, k);
@@ -870,6 +972,12 @@ pub async fn save_messaging_platform(
     let raw_form_obj = form.as_object().ok_or("表单数据格式错误")?;
     let normalized_form = normalize_messaging_platform_form(&platform, raw_form_obj);
     let form_obj = &normalized_form;
+    let current_saved = resolve_platform_config_entry(
+        channels_map.get(storage_key.as_str()),
+        &platform,
+        account_id.as_deref(),
+    )
+    .unwrap_or(Value::Null);
 
     // 用于后续创建 bindings 的平台信息
     let saved_account_id = account_id.clone();
@@ -925,6 +1033,7 @@ pub async fn save_messaging_platform(
             }
 
             // 合并到现有配置，保留用户通过 CLI 设置的 streaming / retry / dmPolicy 等
+            preserve_messaging_credential_refs(&mut entry, form_obj, &current_saved);
             merge_channel_entry(channels_map, "discord", entry);
             // 仅在首次创建时设置默认值，不覆盖用户已有的设置
             if let Some(Value::Object(d)) = channels_map.get_mut("discord") {
@@ -954,6 +1063,7 @@ pub async fn save_messaging_platform(
             );
             put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
 
+            preserve_messaging_credential_refs(&mut entry, form_obj, &current_saved);
             merge_channel_entry(channels_map, "telegram", entry);
         }
         "qqbot" => {
@@ -1068,6 +1178,7 @@ pub async fn save_messaging_platform(
                 form_obj.get("resolveSenderNames"),
             );
             put_bool_value_if_present(&mut entry, "requireMention", form_obj.get("requireMention"));
+            preserve_messaging_credential_refs(&mut entry, form_obj, &current_saved);
 
             // 多账号模式：写入 channels.<storage_key>.accounts.<account_id>
             if let Some(ref acct) = account_id {
@@ -1136,6 +1247,7 @@ pub async fn save_messaging_platform(
                 );
             }
 
+            preserve_messaging_credential_refs(&mut entry, form_obj, &current_saved);
             merge_channel_entry(channels_map, &storage_key, entry);
             ensure_plugin_allowed(&mut cfg, "dingtalk-connector")?;
             ensure_chat_completions_enabled(&mut cfg)?;
@@ -1191,6 +1303,7 @@ pub async fn save_messaging_platform(
                 form_string(form_obj, "groupPolicy"),
             );
             put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
+            preserve_messaging_credential_refs(&mut entry, form_obj, &current_saved);
             merge_channel_entry(channels_map, &storage_key, entry);
         }
         "whatsapp" => {
@@ -1226,6 +1339,7 @@ pub async fn save_messaging_platform(
                 form_string(form_obj, "groupPolicy"),
             );
             put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
+            preserve_messaging_credential_refs(&mut entry, form_obj, &current_saved);
             merge_channel_entry(channels_map, &storage_key, entry);
         }
         "matrix" => {
@@ -1256,6 +1370,7 @@ pub async fn save_messaging_platform(
             );
             put_bool_from_form(&mut entry, "e2ee", &form_string(form_obj, "e2ee"));
             put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
+            preserve_messaging_credential_refs(&mut entry, form_obj, &current_saved);
             merge_channel_entry(channels_map, &storage_key, entry);
             ensure_plugin_allowed(&mut cfg, "matrix")?;
         }
@@ -1289,6 +1404,7 @@ pub async fn save_messaging_platform(
             );
             put_bool_value_if_present(&mut entry, "requireMention", form_obj.get("requireMention"));
             put_array_from_form_value(&mut entry, "allowFrom", form_obj.get("allowFrom"));
+            preserve_messaging_credential_refs(&mut entry, form_obj, &current_saved);
             merge_channel_entry(channels_map, &storage_key, entry);
             ensure_plugin_allowed(&mut cfg, "msteams")?;
         }
@@ -1299,6 +1415,7 @@ pub async fn save_messaging_platform(
                 entry.insert(k.clone(), v.clone());
             }
             entry.insert("enabled".into(), Value::Bool(true));
+            preserve_messaging_credential_refs(&mut entry, form_obj, &current_saved);
             merge_channel_entry(channels_map, &storage_key, entry);
         }
     }
@@ -1933,18 +2050,25 @@ const OPENCLAW_QQBOT_EXTENSION_FOLDER: &str = "openclaw-qqbot";
 const QQBOT_DEFAULT_ACCOUNT_ID: &str = "default";
 
 fn qqbot_channel_has_credentials(val: &Value) -> bool {
-    val.get("appId")
-        .and_then(|v| v.as_str())
-        .is_some_and(|s| !s.trim().is_empty())
+    val.get("appId").is_some_and(secret_like_value_present)
         || val
             .get("clientSecret")
             .or_else(|| val.get("appSecret"))
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| !s.trim().is_empty())
-        || val
-            .get("token")
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| !s.trim().is_empty())
+            .is_some_and(secret_like_value_present)
+        || val.get("token").is_some_and(secret_like_value_present)
+}
+
+fn secret_like_value_present(value: &Value) -> bool {
+    value.as_str().is_some_and(|s| !s.trim().is_empty()) || secret_ref_placeholder(value).is_some()
+}
+
+fn account_display_value(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(|v| {
+        v.as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| secret_ref_placeholder(v))
+    })
 }
 
 // ── QQ 插件：扩展目录可能是 ~/.openclaw/extensions/openclaw-qqbot（官方包）或旧版 qqbot 目录 ──
@@ -2303,8 +2427,11 @@ pub async fn list_configured_platforms() -> Result<Value, String> {
             if let Some(accts) = val.get("accounts").and_then(|a| a.as_object()) {
                 for (acct_id, acct_val) in accts {
                     let mut entry = json!({ "accountId": acct_id });
-                    if let Some(app_id) = acct_val.get("appId").and_then(|v| v.as_str()) {
-                        entry["appId"] = Value::String(app_id.to_string());
+                    if let Some(display_id) = account_display_value(acct_val, "appId")
+                        .or_else(|| account_display_value(acct_val, "clientId"))
+                        .or_else(|| account_display_value(acct_val, "account"))
+                    {
+                        entry["appId"] = Value::String(display_id);
                     }
                     accounts.push(entry);
                 }
@@ -4273,5 +4400,71 @@ mod tests {
             Some("mentioned")
         );
         assert_eq!(form.get("allowFrom").and_then(|v| v.as_str()), Some("U123"));
+    }
+
+    #[test]
+    fn channel_form_readback_masks_secret_refs() {
+        let saved = json!({
+            "botToken": {
+                "source": "env",
+                "provider": "default",
+                "id": "TELEGRAM_BOT_TOKEN"
+            }
+        });
+        let mut form = Map::new();
+        insert_secret_aware_form_value(&mut form, &saved, "botToken");
+
+        assert_eq!(
+            form.get("botToken").and_then(|v| v.as_str()),
+            Some("SecretRef(env:default:TELEGRAM_BOT_TOKEN)")
+        );
+        assert_eq!(
+            form.get("__secretRefs")
+                .and_then(|v| v.get("botToken"))
+                .cloned(),
+            saved.get("botToken").cloned()
+        );
+    }
+
+    #[test]
+    fn channel_save_preserves_unchanged_secret_ref_placeholder() {
+        let current = json!({
+            "botToken": {
+                "source": "env",
+                "provider": "default",
+                "id": "SLACK_BOT_TOKEN"
+            }
+        });
+        let form = json!({
+            "botToken": "SecretRef(env:default:SLACK_BOT_TOKEN)"
+        });
+        let value = resolve_messaging_credential_value_for_save(
+            form.as_object().expect("object"),
+            &current,
+            "botToken",
+        );
+
+        assert_eq!(value, current.get("botToken").cloned());
+    }
+
+    #[test]
+    fn channel_save_replaces_secret_ref_when_user_enters_new_secret() {
+        let current = json!({
+            "token": {
+                "source": "env",
+                "provider": "default",
+                "id": "DISCORD_BOT_TOKEN"
+            }
+        });
+        let form = json!({
+            "token": "new-discord-token"
+        });
+        let value = resolve_messaging_credential_value_for_save(
+            form.as_object().expect("object"),
+            &current,
+            "token",
+        );
+
+        assert_eq!(value, Some(Value::String("new-discord-token".into())));
     }
 }
