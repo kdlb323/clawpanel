@@ -197,6 +197,7 @@ fn preserve_messaging_credential_refs(
         "botToken",
         "channelAccessToken",
         "channelSecret",
+        "code",
         "clientId",
         "clientSecret",
         "refreshToken",
@@ -286,6 +287,7 @@ fn channel_root_has_messaging_credential(root: &Map<String, Value>) -> bool {
         "botToken",
         "channelAccessToken",
         "channelSecret",
+        "code",
         "clientId",
         "clientSecret",
         "refreshToken",
@@ -332,6 +334,7 @@ fn required_channel_credential_fields(
         "nextcloud-talk" => vec![("baseUrl", "Base URL")],
         "nostr" => vec![("privateKey", "Private Key")],
         "irc" => vec![("host", "Host"), ("nick", "Nick")],
+        "tlon" => vec![("ship", "Ship"), ("url", "URL"), ("code", "Code")],
         "twitch" => vec![
             ("username", "Username"),
             ("accessToken", "Access Token"),
@@ -1081,6 +1084,10 @@ fn normalize_messaging_platform_form(
         "channels",
         "groups",
         "mentionPatterns",
+        "groupChannels",
+        "dmAllowlist",
+        "groupInviteAllowlist",
+        "defaultAuthorizedShips",
     ] {
         if normalized.contains_key(key) {
             let items = json_array_from_csv_value(normalized.get(key));
@@ -1115,6 +1122,10 @@ fn normalize_messaging_platform_form(
         "tls",
         "nickservEnabled",
         "nickservRegister",
+        "autoDiscoverChannels",
+        "showModelSignature",
+        "autoAcceptDmInvites",
+        "autoAcceptGroupInvites",
     ] {
         if normalized.contains_key(key) {
             let value = match normalized.get(key) {
@@ -1409,6 +1420,9 @@ fn resolve_platform_config_entry(
     let root = channel_root?;
     let account = account_id.map(str::trim).filter(|s| !s.is_empty());
     if let Some(acct) = account {
+        if platform_storage_key(platform) == "tlon" && acct == QQBOT_DEFAULT_ACCOUNT_ID {
+            return Some(root.clone());
+        }
         if let Some(value) = root.get("accounts").and_then(|a| a.get(acct)) {
             return Some(value.clone());
         }
@@ -2092,6 +2106,41 @@ pub async fn read_platform_config(
                 if let Some(v) = nickserv.get("registerEmail").and_then(|v| v.as_str()) {
                     form.insert("nickservRegisterEmail".into(), Value::String(v.into()));
                 }
+            }
+        }
+        "tlon" => {
+            let mut shared = channel_root
+                .and_then(|root| root.as_object())
+                .cloned()
+                .unwrap_or_default();
+            if let Some(saved_obj) = saved.as_object() {
+                for (key, value) in saved_obj {
+                    shared.insert(key.clone(), value.clone());
+                }
+            }
+            let shared = Value::Object(shared);
+            for key in ["name", "ship", "url", "code", "responsePrefix", "ownerShip"] {
+                insert_secret_aware_form_value(&mut form, &shared, key);
+            }
+            insert_bool_as_string(&mut form, &shared, "enabled");
+            if let Some(network) = shared.get("network") {
+                insert_bool_as_string(&mut form, network, "dangerouslyAllowPrivateNetwork");
+            }
+            for key in [
+                "groupChannels",
+                "dmAllowlist",
+                "groupInviteAllowlist",
+                "defaultAuthorizedShips",
+            ] {
+                insert_array_as_csv(&mut form, &shared, key);
+            }
+            for key in [
+                "autoDiscoverChannels",
+                "showModelSignature",
+                "autoAcceptDmInvites",
+                "autoAcceptGroupInvites",
+            ] {
+                insert_bool_as_string(&mut form, &shared, key);
             }
         }
         "synology-chat" => {
@@ -3445,6 +3494,75 @@ pub async fn save_messaging_platform(
             )?;
             ensure_plugin_allowed(&mut cfg, "irc")?;
         }
+        "tlon" => {
+            let ship = form_string(form_obj, "ship");
+            let url = form_string(form_obj, "url");
+            let code = form_string(form_obj, "code");
+            if ship.is_empty() {
+                return Err("Tlon Ship 不能为空".into());
+            }
+            if url.is_empty() {
+                return Err("Tlon URL 不能为空".into());
+            }
+            if code.is_empty() && !has_configured_messaging_value(form_obj.get("code")) {
+                return Err("Tlon Code 不能为空".into());
+            }
+
+            let mut entry = Map::new();
+            entry.insert("enabled".into(), Value::Bool(true));
+            put_bool_value_if_present(&mut entry, "enabled", form_obj.get("enabled"));
+            for key in ["name", "ship", "url", "responsePrefix", "ownerShip"] {
+                put_string(&mut entry, key, form_string(form_obj, key));
+            }
+            match resolve_messaging_credential_value_for_save(form_obj, &current_saved, "code") {
+                Some(value) => {
+                    entry.insert("code".into(), value);
+                }
+                None => {
+                    entry.remove("code");
+                }
+            }
+            for key in [
+                "groupChannels",
+                "dmAllowlist",
+                "groupInviteAllowlist",
+                "defaultAuthorizedShips",
+            ] {
+                put_array_from_form_value(&mut entry, key, form_obj.get(key));
+            }
+            for key in [
+                "autoDiscoverChannels",
+                "showModelSignature",
+                "autoAcceptDmInvites",
+                "autoAcceptGroupInvites",
+            ] {
+                put_bool_value_if_present(&mut entry, key, form_obj.get(key));
+            }
+            if form_obj.contains_key("dangerouslyAllowPrivateNetwork") {
+                let mut network = current_saved
+                    .get("network")
+                    .and_then(|v| v.as_object())
+                    .cloned()
+                    .unwrap_or_default();
+                put_bool_value_if_present(
+                    &mut network,
+                    "dangerouslyAllowPrivateNetwork",
+                    form_obj.get("dangerouslyAllowPrivateNetwork"),
+                );
+                if !network.is_empty() {
+                    entry.insert("network".into(), Value::Object(network));
+                }
+            }
+            preserve_messaging_credential_refs(&mut entry, form_obj, &current_saved);
+            let target_account_id =
+                if account_id.as_deref().map(str::trim) == Some(QQBOT_DEFAULT_ACCOUNT_ID) {
+                    None
+                } else {
+                    account_id.as_deref()
+                };
+            merge_channel_entry_for_account(channels_map, &storage_key, target_account_id, entry)?;
+            ensure_plugin_allowed(&mut cfg, "tlon")?;
+        }
         "synology-chat" => {
             let token = form_string(form_obj, "token");
             let incoming_url = form_string(form_obj, "incomingUrl");
@@ -3761,6 +3879,10 @@ pub async fn verify_bot_token(platform: String, form: Value) -> Result<Value, St
         "irc" => Ok(json!({
             "valid": true,
             "warnings": ["IRC 面板已完成基础字段校验；实际连通性请通过 Gateway 启动日志或 openclaw channels status --probe 验证"]
+        })),
+        "tlon" => Ok(json!({
+            "valid": true,
+            "warnings": ["Tlon 面板已完成基础字段校验；实际连通性请通过 Gateway 启动日志或 openclaw channels status --probe 验证"]
         })),
         _ => Ok(json!({
             "valid": true,
@@ -4686,6 +4808,7 @@ pub async fn list_configured_platforms() -> Result<Value, String> {
                         .or_else(|| account_display_value(acct_val, "clientId"))
                         .or_else(|| account_display_value(acct_val, "account"))
                         .or_else(|| account_display_value(acct_val, "nick"))
+                        .or_else(|| account_display_value(acct_val, "ship"))
                     {
                         entry["appId"] = Value::String(display_id);
                     }
@@ -7294,6 +7417,139 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .contains("IRC 面板已完成基础字段校验"));
+    }
+
+    #[test]
+    fn normalize_tlon_form_preserves_ship_login_and_invite_fields() {
+        let form = json!({
+            "enabled": "true",
+            "name": "Main Ship",
+            "ship": "~sampel-palnet",
+            "url": "https://urbit.example.com",
+            "code": "lidlut-tabwed-pillex-ridrup",
+            "dangerouslyAllowPrivateNetwork": "true",
+            "groupChannels": "chat/~host-ship/general, chat/~host-ship/support",
+            "dmAllowlist": "zod, ~nec",
+            "groupInviteAllowlist": "~bus",
+            "autoDiscoverChannels": "true",
+            "showModelSignature": "false",
+            "responsePrefix": "[Tlon]",
+            "autoAcceptDmInvites": "true",
+            "autoAcceptGroupInvites": "false",
+            "ownerShip": "~sampel-palnet",
+            "defaultAuthorizedShips": "~zod, ~nec"
+        });
+        let normalized =
+            normalize_messaging_platform_form("tlon", form.as_object().expect("object"));
+
+        assert_eq!(
+            normalized.get("enabled").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            normalized
+                .get("dangerouslyAllowPrivateNetwork")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            normalized
+                .get("groupChannels")
+                .and_then(|v| v.as_array())
+                .map(|items| items.len()),
+            Some(2)
+        );
+        assert_eq!(
+            normalized
+                .get("dmAllowlist")
+                .and_then(|v| v.as_array())
+                .map(|items| items.len()),
+            Some(2)
+        );
+        assert_eq!(
+            normalized
+                .get("groupInviteAllowlist")
+                .and_then(|v| v.as_array())
+                .map(|items| items.len()),
+            Some(1)
+        );
+        assert_eq!(
+            normalized
+                .get("defaultAuthorizedShips")
+                .and_then(|v| v.as_array())
+                .map(|items| items.len()),
+            Some(2)
+        );
+        assert_eq!(
+            normalized
+                .get("autoDiscoverChannels")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            normalized
+                .get("showModelSignature")
+                .and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            normalized
+                .get("autoAcceptDmInvites")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            normalized
+                .get("autoAcceptGroupInvites")
+                .and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert!(channel_diagnosis_credentials_ready("tlon", &normalized));
+
+        let missing = normalize_messaging_platform_form(
+            "tlon",
+            json!({
+                "ship": "~sampel-palnet",
+                "url": "https://urbit.example.com"
+            })
+            .as_object()
+            .expect("object"),
+        );
+        assert!(!channel_diagnosis_credentials_ready("tlon", &missing));
+        let diagnosis =
+            build_openclaw_channel_diagnosis("tlon", None, true, true, &missing, None, None);
+        assert!(diagnosis
+            .get("checks")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items
+                .iter()
+                .find(|item| { item.get("id").and_then(|v| v.as_str()) == Some("credentials") }))
+            .and_then(|item| item.get("detail"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .contains("Code"));
+    }
+
+    #[test]
+    fn verify_tlon_token_returns_probe_guidance_warning() {
+        let result = tauri::async_runtime::block_on(verify_bot_token(
+            "tlon".to_string(),
+            json!({
+                "ship": "~sampel-palnet",
+                "url": "https://urbit.example.com",
+                "code": "lidlut-tabwed-pillex-ridrup"
+            }),
+        ))
+        .expect("verify result");
+
+        assert_eq!(result.get("valid").and_then(|v| v.as_bool()), Some(true));
+        assert!(result
+            .get("warnings")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .contains("Tlon 面板已完成基础字段校验"));
     }
 
     #[test]

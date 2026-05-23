@@ -18,6 +18,7 @@ export const CHANNEL_LABELS = {
   imessage: 'iMessage',
   line: 'LINE',
   nostr: 'Nostr',
+  tlon: 'Tlon',
   mattermost: 'Mattermost',
   clickclack: 'ClickClack',
   'nextcloud-talk': 'Nextcloud Talk',

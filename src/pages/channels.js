@@ -418,6 +418,39 @@ const PLATFORM_REGISTRY = {
     pluginRequired: '@openclaw/nostr@latest',
     pluginId: 'nostr',
   },
+  tlon: {
+    label: 'Tlon',
+    iconName: 'globe',
+    desc: t('channels.tlonDesc'),
+    guide: [
+      t('channels.tlonGuide1'),
+      t('channels.tlonGuide2'),
+      t('channels.tlonGuide3'),
+      t('channels.tlonGuide4'),
+    ],
+    guideFooter: t('channels.tlonGuideFooter'),
+    fields: [
+      { key: 'name', label: t('channels.accountName'), placeholder: t('channels.optionalEg', { example: 'main-ship' }), required: false },
+      { key: 'ship', label: 'Ship', placeholder: '~sampel-palnet', required: true, hint: t('channels.tlonShipHint') },
+      { key: 'url', label: 'URL', placeholder: 'https://urbit.example.com', required: true, hint: t('channels.tlonUrlHint') },
+      { key: 'code', label: 'Code', placeholder: 'lidlut-tabwed-pillex-ridrup', secret: true, required: true, hint: t('channels.tlonCodeHint') },
+      { key: 'dangerouslyAllowPrivateNetwork', label: t('channels.mattermostPrivateNetwork'), type: 'select', options: BOOLEAN_OPTIONS, required: false, hint: t('channels.tlonPrivateNetworkHint') },
+      { key: 'groupChannels', label: 'Group Channels', placeholder: 'chat/~host-ship/general, chat/~host-ship/support', required: false, hint: t('channels.tlonGroupChannelsHint') },
+      { key: 'dmAllowlist', label: 'DM Allowlist', placeholder: '~zod, ~nec', required: false, hint: t('channels.tlonDmAllowlistHint') },
+      { key: 'groupInviteAllowlist', label: 'Group Invite Allowlist', placeholder: '~zod, ~nec', required: false, hint: t('channels.tlonGroupInviteAllowlistHint') },
+      { key: 'autoDiscoverChannels', label: t('channels.tlonAutoDiscoverChannels'), type: 'select', options: BOOLEAN_OPTIONS, required: false, hint: t('channels.tlonAutoDiscoverChannelsHint') },
+      { key: 'showModelSignature', label: t('channels.tlonShowModelSignature'), type: 'select', options: BOOLEAN_OPTIONS, required: false },
+      { key: 'responsePrefix', label: 'Response Prefix', placeholder: t('channels.optionalEg', { example: '[Tlon]' }), required: false },
+      { key: 'autoAcceptDmInvites', label: t('channels.tlonAutoAcceptDmInvites'), type: 'select', options: BOOLEAN_OPTIONS, required: false, hint: t('channels.tlonAutoAcceptDmInvitesHint') },
+      { key: 'autoAcceptGroupInvites', label: t('channels.tlonAutoAcceptGroupInvites'), type: 'select', options: BOOLEAN_OPTIONS, required: false, hint: t('channels.tlonAutoAcceptGroupInvitesHint') },
+      { key: 'ownerShip', label: 'Owner Ship', placeholder: '~sampel-palnet', required: false, hint: t('channels.tlonOwnerShipHint') },
+      { key: 'defaultAuthorizedShips', label: 'Default Authorized Ships', placeholder: '~zod, ~nec', required: false, hint: t('channels.tlonDefaultAuthorizedShipsHint') },
+    ],
+    configKey: 'tlon',
+    pairingChannel: 'tlon',
+    pluginRequired: '@openclaw/tlon@latest',
+    pluginId: 'tlon',
+  },
   irc: {
     label: 'IRC',
     iconName: 'hash',
@@ -993,7 +1026,7 @@ function applyRouteIntent(page, state) {
 // ── 已配置平台渲染 ──
 
 // ── 多账号支持的平台：与 OpenClaw 的 accounts/defaultAccount 配置模型保持一致 ──
-const MULTI_INSTANCE_PLATFORMS = ['telegram', 'discord', 'slack', 'feishu', 'dingtalk', 'dingtalk-connector', 'qqbot', 'zalo', 'zalouser', 'line', 'mattermost', 'clickclack', 'nextcloud-talk', 'twitch', 'irc', 'synology-chat', 'googlechat', 'signal']
+const MULTI_INSTANCE_PLATFORMS = ['telegram', 'discord', 'slack', 'feishu', 'dingtalk', 'dingtalk-connector', 'qqbot', 'zalo', 'zalouser', 'line', 'mattermost', 'clickclack', 'nextcloud-talk', 'twitch', 'tlon', 'irc', 'synology-chat', 'googlechat', 'signal']
 
 function supportsMessagingMultiAccount(pid) {
   return MULTI_INSTANCE_PLATFORMS.includes(pid)

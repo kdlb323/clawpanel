@@ -689,6 +689,145 @@ test('IRC 读取和诊断会回显服务器、NickServ 与频道字段', () => {
   assert.equal(ready.checks.find(item => item.id === 'credentials')?.ok, true)
 })
 
+test('Tlon 默认账号保存会写入上游根节点配置并启用插件', () => {
+  const cfg = { channels: {} }
+
+  mergeOpenClawMessagingPlatformConfig(cfg, {
+    platform: 'tlon',
+    accountId: 'default',
+    form: {
+      enabled: 'true',
+      name: 'Main Ship',
+      ship: '~sampel-palnet',
+      url: 'https://urbit.example.com',
+      code: 'lidlut-tabwed-pillex-ridrup',
+      dangerouslyAllowPrivateNetwork: 'true',
+      groupChannels: 'chat/~host-ship/general, chat/~host-ship/support',
+      dmAllowlist: 'zod, ~nec',
+      groupInviteAllowlist: '~bus',
+      autoDiscoverChannels: 'true',
+      showModelSignature: 'false',
+      responsePrefix: '[Tlon]',
+      autoAcceptDmInvites: 'true',
+      autoAcceptGroupInvites: 'false',
+      ownerShip: '~sampel-palnet',
+      defaultAuthorizedShips: '~zod, ~nec',
+    },
+  })
+
+  const root = cfg.channels.tlon
+  assert.equal(root.enabled, true)
+  assert.equal(root.name, 'Main Ship')
+  assert.equal(root.ship, '~sampel-palnet')
+  assert.equal(root.url, 'https://urbit.example.com')
+  assert.equal(root.code, 'lidlut-tabwed-pillex-ridrup')
+  assert.deepEqual(root.network, { dangerouslyAllowPrivateNetwork: true })
+  assert.deepEqual(root.groupChannels, ['chat/~host-ship/general', 'chat/~host-ship/support'])
+  assert.deepEqual(root.dmAllowlist, ['zod', '~nec'])
+  assert.deepEqual(root.groupInviteAllowlist, ['~bus'])
+  assert.equal(root.autoDiscoverChannels, true)
+  assert.equal(root.showModelSignature, false)
+  assert.equal(root.responsePrefix, '[Tlon]')
+  assert.equal(root.autoAcceptDmInvites, true)
+  assert.equal(root.autoAcceptGroupInvites, false)
+  assert.equal(root.ownerShip, '~sampel-palnet')
+  assert.deepEqual(root.defaultAuthorizedShips, ['~zod', '~nec'])
+  assert.equal(Object.hasOwn(root, 'accounts'), false)
+  assert.equal(cfg.plugins.entries.tlon.enabled, true)
+})
+
+test('Tlon 命名账号保存会写入 accounts 并保留根节点共享字段', () => {
+  const cfg = {
+    channels: {
+      tlon: {
+        enabled: true,
+        defaultAuthorizedShips: ['~zod'],
+      },
+    },
+  }
+
+  mergeOpenClawMessagingPlatformConfig(cfg, {
+    platform: 'tlon',
+    accountId: 'support',
+    form: {
+      enabled: 'true',
+      ship: '~support-palnet',
+      url: 'https://support.example.com',
+      code: 'fodwyt-ragful-sivnys-nivlup',
+      groupChannels: 'chat/~host-ship/support',
+      dmAllowlist: '~zod',
+      autoDiscoverChannels: 'false',
+      ownerShip: '~support-palnet',
+    },
+  })
+
+  const root = cfg.channels.tlon
+  const account = root.accounts.support
+  assert.deepEqual(root.defaultAuthorizedShips, ['~zod'])
+  assert.equal(account.enabled, true)
+  assert.equal(account.ship, '~support-palnet')
+  assert.equal(account.url, 'https://support.example.com')
+  assert.equal(account.code, 'fodwyt-ragful-sivnys-nivlup')
+  assert.deepEqual(account.groupChannels, ['chat/~host-ship/support'])
+  assert.deepEqual(account.dmAllowlist, ['~zod'])
+  assert.equal(account.autoDiscoverChannels, false)
+  assert.equal(account.ownerShip, '~support-palnet')
+  assert.equal(cfg.plugins.entries.tlon.enabled, true)
+})
+
+test('Tlon 读取和诊断会回显 Ship、URL、登录码和安全配置', () => {
+  const values = buildMessagingPlatformFormValues('tlon', {
+    enabled: true,
+    name: 'Main Ship',
+    ship: '~sampel-palnet',
+    url: 'https://urbit.example.com',
+    code: 'lidlut-tabwed-pillex-ridrup',
+    network: { dangerouslyAllowPrivateNetwork: true },
+    groupChannels: ['chat/~host-ship/general', 'chat/~host-ship/support'],
+    dmAllowlist: ['~zod', '~nec'],
+    groupInviteAllowlist: ['~bus'],
+    autoDiscoverChannels: true,
+    showModelSignature: false,
+    responsePrefix: '[Tlon]',
+    autoAcceptDmInvites: true,
+    autoAcceptGroupInvites: false,
+    ownerShip: '~sampel-palnet',
+    defaultAuthorizedShips: ['~zod', '~nec'],
+  })
+  const missingCode = buildOpenClawChannelDiagnosis({
+    platform: 'tlon',
+    configExists: true,
+    channelEnabled: true,
+    form: { ship: '~sampel-palnet', url: 'https://urbit.example.com' },
+  })
+  const ready = buildOpenClawChannelDiagnosis({
+    platform: 'tlon',
+    configExists: true,
+    channelEnabled: true,
+    form: values,
+  })
+
+  assert.equal(values.enabled, 'true')
+  assert.equal(values.name, 'Main Ship')
+  assert.equal(values.ship, '~sampel-palnet')
+  assert.equal(values.url, 'https://urbit.example.com')
+  assert.equal(values.code, 'lidlut-tabwed-pillex-ridrup')
+  assert.equal(values.dangerouslyAllowPrivateNetwork, 'true')
+  assert.equal(values.groupChannels, 'chat/~host-ship/general, chat/~host-ship/support')
+  assert.equal(values.dmAllowlist, '~zod, ~nec')
+  assert.equal(values.groupInviteAllowlist, '~bus')
+  assert.equal(values.autoDiscoverChannels, 'true')
+  assert.equal(values.showModelSignature, 'false')
+  assert.equal(values.responsePrefix, '[Tlon]')
+  assert.equal(values.autoAcceptDmInvites, 'true')
+  assert.equal(values.autoAcceptGroupInvites, 'false')
+  assert.equal(values.ownerShip, '~sampel-palnet')
+  assert.equal(values.defaultAuthorizedShips, '~zod, ~nec')
+  assert.equal(missingCode.checks.find(item => item.id === 'credentials')?.ok, false)
+  assert.match(missingCode.checks.find(item => item.id === 'credentials')?.detail || '', /Code/)
+  assert.equal(ready.checks.find(item => item.id === 'credentials')?.ok, true)
+})
+
 test('Signal 渠道保存会保留多账号和上游运行字段', () => {
   const cfg = { channels: {} }
 
@@ -940,6 +1079,20 @@ test('渠道账号列表会使用 IRC Nick 作为安全展示标识', () => {
 
   assert.deepEqual(accounts, [
     { accountId: 'libera', appId: 'openclaw-bot' },
+  ])
+})
+
+test('渠道账号列表会使用 Tlon Ship 作为安全展示标识', () => {
+  const accounts = listPlatformAccounts({
+    accounts: {
+      support: {
+        ship: '~support-palnet',
+      },
+    },
+  })
+
+  assert.deepEqual(accounts, [
+    { accountId: 'support', appId: '~support-palnet' },
   ])
 })
 

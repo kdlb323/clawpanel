@@ -2498,7 +2498,7 @@ export function normalizeMessagingPlatformForm(platform, form = {}) {
     normalized.allowedUserIds = csvToStringArray(normalized.allowedUserIds)
   }
 
-  for (const key of ['promptStarters', 'delegatedAuthScopes', 'attachmentRoots', 'remoteAttachmentRoots', 'toolsAllow', 'allowedRoles', 'relays', 'channels', 'groups', 'mentionPatterns']) {
+  for (const key of ['promptStarters', 'delegatedAuthScopes', 'attachmentRoots', 'remoteAttachmentRoots', 'toolsAllow', 'allowedRoles', 'relays', 'channels', 'groups', 'mentionPatterns', 'groupChannels', 'dmAllowlist', 'groupInviteAllowlist', 'defaultAuthorizedShips']) {
     if (Object.hasOwn(normalized, key)) normalized[key] = csvToStringArray(normalized[key])
   }
 
@@ -2515,7 +2515,7 @@ export function normalizeMessagingPlatformForm(platform, form = {}) {
     }
   }
 
-  for (const key of ['dangerouslyAllowNameMatching', 'dangerouslyAllowPrivateNetwork', 'dangerouslyAllowInheritedWebhookPath', 'allowInsecureSsl', 'enabled', 'allowBots', 'blockStreaming', 'useManagedIdentity', 'typingIndicator', 'welcomeCard', 'groupWelcomeCard', 'feedbackEnabled', 'feedbackReflection', 'delegatedAuthEnabled', 'ssoEnabled', 'configWrites', 'includeAttachments', 'sendReadReceipts', 'coalesceSameSenderDms', 'selfChatMode', 'ackDirect', 'senderIsOwner', 'requireMention', 'tls', 'nickservEnabled', 'nickservRegister']) {
+  for (const key of ['dangerouslyAllowNameMatching', 'dangerouslyAllowPrivateNetwork', 'dangerouslyAllowInheritedWebhookPath', 'allowInsecureSsl', 'enabled', 'allowBots', 'blockStreaming', 'useManagedIdentity', 'typingIndicator', 'welcomeCard', 'groupWelcomeCard', 'feedbackEnabled', 'feedbackReflection', 'delegatedAuthEnabled', 'ssoEnabled', 'configWrites', 'includeAttachments', 'sendReadReceipts', 'coalesceSameSenderDms', 'selfChatMode', 'ackDirect', 'senderIsOwner', 'requireMention', 'tls', 'nickservEnabled', 'nickservRegister', 'autoDiscoverChannels', 'showModelSignature', 'autoAcceptDmInvites', 'autoAcceptGroupInvites']) {
     if (Object.hasOwn(normalized, key)) {
       const value = typeof normalized[key] === 'boolean'
         ? String(normalized[key])
@@ -2645,6 +2645,7 @@ const MESSAGING_CREDENTIAL_FIELDS = [
   'botToken',
   'channelAccessToken',
   'channelSecret',
+  'code',
   'clientId',
   'clientSecret',
   'refreshToken',
@@ -2744,6 +2745,7 @@ const CHANNEL_DIAG_REQUIRED_FIELDS = {
   'nextcloud-talk': [['baseUrl', 'Base URL']],
   nostr: [['privateKey', 'Private Key']],
   irc: [['host', 'Host'], ['nick', 'Nick']],
+  tlon: [['ship', 'Ship'], ['url', 'URL'], ['code', 'Code']],
   twitch: [['username', 'Username'], ['accessToken', 'Access Token'], ['clientId', 'Client ID'], ['channel', 'Channel']],
   signal: [['account', 'Signal 账号']],
 }
@@ -3211,6 +3213,26 @@ export function buildMessagingPlatformFormValues(platform, saved = {}, options =
     return form
   }
 
+  if (storageKey === 'tlon') {
+    const shared = options.channelRoot && typeof options.channelRoot === 'object'
+      ? { ...options.channelRoot, ...saved }
+      : saved
+    if (options.channelRoot?.network && !saved.network) shared.network = options.channelRoot.network
+    for (const key of ['name', 'ship', 'url', 'code', 'responsePrefix', 'ownerShip']) {
+      putSecretAwareFormValue(form, shared, key)
+    }
+    putBoolFormValue(form, shared, 'enabled')
+    putBoolFormValue(form, shared?.network, 'dangerouslyAllowPrivateNetwork')
+    putCsvFormValue(form, shared, 'groupChannels')
+    putCsvFormValue(form, shared, 'dmAllowlist')
+    putCsvFormValue(form, shared, 'groupInviteAllowlist')
+    putCsvFormValue(form, shared, 'defaultAuthorizedShips')
+    for (const key of ['autoDiscoverChannels', 'showModelSignature', 'autoAcceptDmInvites', 'autoAcceptGroupInvites']) {
+      putBoolFormValue(form, shared, key)
+    }
+    return form
+  }
+
   if (storageKey === 'synology-chat') {
     for (const key of ['token', 'incomingUrl', 'nasHost', 'webhookPath', 'botName']) {
       putSecretAwareFormValue(form, saved, key)
@@ -3660,6 +3682,7 @@ function secretAwareAccountDisplayValue(value) {
 function resolvePlatformConfigEntry(channelRoot, platform, accountId) {
   if (!channelRoot || typeof channelRoot !== 'object') return null
   const accountKey = typeof accountId === 'string' ? accountId.trim() : ''
+  if (platformStorageKey(platform) === 'tlon' && accountKey === QQBOT_DEFAULT_ACCOUNT_ID) return channelRoot
   if (accountKey) return channelRoot.accounts?.[accountKey] || channelRoot
   if (platformStorageKey(platform) === 'qqbot' && !channelHasQqbotCredentials(channelRoot)) {
     return channelRoot.accounts?.[QQBOT_DEFAULT_ACCOUNT_ID] || channelRoot
@@ -3674,7 +3697,7 @@ export function listPlatformAccounts(channelRoot) {
   return Object.entries(channelRoot.accounts)
     .map(([accountId, value]) => {
       const entry = { accountId }
-      const displayId = ['appId', 'clientId', 'account', 'nick']
+      const displayId = ['appId', 'clientId', 'account', 'nick', 'ship']
         .map(key => secretAwareAccountDisplayValue(value?.[key]))
         .find(Boolean)
       if (displayId) entry.appId = displayId
@@ -4056,6 +4079,24 @@ function buildOpenClawMessagingPlatformEntry(platform, form, currentSaved = {}) 
     if (typeof form.nickservRegister === 'boolean') nickserv.register = form.nickservRegister
     if (form.nickservRegisterEmail) nickserv.registerEmail = form.nickservRegisterEmail
     if (Object.keys(nickserv).length) entry.nickserv = nickserv
+  } else if (storageKey === 'tlon') {
+    entry.enabled = typeof form.enabled === 'boolean' ? form.enabled : true
+    for (const key of ['name', 'ship', 'url', 'responsePrefix', 'ownerShip']) {
+      if (form[key]) entry[key] = form[key]
+    }
+    const code = resolveMessagingCredentialFormValueForSave({ form, current: currentSaved, formKey: 'code' })
+    if (code === undefined) delete entry.code
+    else entry.code = code
+    if (Array.isArray(form.groupChannels) && form.groupChannels.length) entry.groupChannels = form.groupChannels
+    if (Array.isArray(form.dmAllowlist) && form.dmAllowlist.length) entry.dmAllowlist = form.dmAllowlist
+    if (Array.isArray(form.groupInviteAllowlist) && form.groupInviteAllowlist.length) entry.groupInviteAllowlist = form.groupInviteAllowlist
+    if (Array.isArray(form.defaultAuthorizedShips) && form.defaultAuthorizedShips.length) entry.defaultAuthorizedShips = form.defaultAuthorizedShips
+    for (const key of ['autoDiscoverChannels', 'showModelSignature', 'autoAcceptDmInvites', 'autoAcceptGroupInvites']) {
+      if (typeof form[key] === 'boolean') entry[key] = form[key]
+    }
+    if (typeof form.dangerouslyAllowPrivateNetwork === 'boolean') {
+      entry.network = { ...(currentSaved?.network || {}), dangerouslyAllowPrivateNetwork: form.dangerouslyAllowPrivateNetwork }
+    }
   } else if (storageKey === 'synology-chat') {
     for (const key of ['token', 'incomingUrl', 'nasHost', 'webhookPath', 'botName']) {
       if (form[key]) entry[key] = form[key]
@@ -4096,8 +4137,11 @@ export function mergeOpenClawMessagingPlatformConfig(cfg, { platform, form, acco
   const normalizedAccountId = typeof accountId === 'string' ? accountId.trim() : ''
   const currentSaved = resolvePlatformConfigEntry(cfg.channels?.[storageKey], platform, normalizedAccountId) || {}
   const entry = buildOpenClawMessagingPlatformEntry(platform, normalizedForm, currentSaved)
-  applyMessagingPlatformEntry(cfg, storageKey, storageKey === 'nostr' ? '' : normalizedAccountId, entry)
-  if (['zalo', 'zalouser', 'line', 'mattermost', 'clickclack', 'nextcloud-talk', 'twitch', 'nostr', 'irc', 'synology-chat', 'googlechat', 'msteams', 'imessage', 'whatsapp'].includes(storageKey)) {
+  const targetAccountId = storageKey === 'nostr' || (storageKey === 'tlon' && normalizedAccountId === QQBOT_DEFAULT_ACCOUNT_ID)
+    ? ''
+    : normalizedAccountId
+  applyMessagingPlatformEntry(cfg, storageKey, targetAccountId, entry)
+  if (['zalo', 'zalouser', 'line', 'mattermost', 'clickclack', 'nextcloud-talk', 'twitch', 'nostr', 'irc', 'tlon', 'synology-chat', 'googlechat', 'msteams', 'imessage', 'whatsapp'].includes(storageKey)) {
     ensureMessagingPluginAllowed(cfg, storageKey)
   }
   return { entry, accountId: normalizedAccountId, storageKey }
@@ -5567,16 +5611,19 @@ const handlers = {
       } else {
         setRootChannelEntry(entry)
       }
-    } else if (['line', 'mattermost', 'clickclack', 'nextcloud-talk', 'twitch', 'nostr', 'irc', 'synology-chat', 'googlechat', 'msteams', 'whatsapp'].includes(storageKey)) {
+    } else if (['line', 'mattermost', 'clickclack', 'nextcloud-talk', 'twitch', 'nostr', 'irc', 'tlon', 'synology-chat', 'googlechat', 'msteams', 'whatsapp'].includes(storageKey)) {
       const built = buildOpenClawMessagingPlatformEntry(platform, form, currentSaved)
-      applyMessagingPlatformEntry(cfg, storageKey, storageKey === 'nostr' ? '' : normalizedAccountId, built)
+      const targetAccountId = storageKey === 'nostr' || (storageKey === 'tlon' && normalizedAccountId === QQBOT_DEFAULT_ACCOUNT_ID)
+        ? ''
+        : normalizedAccountId
+      applyMessagingPlatformEntry(cfg, storageKey, targetAccountId, built)
       ensureMessagingPluginAllowed(cfg, storageKey)
     } else {
       Object.assign(entry, form)
       preserveMessagingCredentialRefs(entry, form, currentSaved)
     }
 
-    if (platform !== 'qqbot' && platform !== 'feishu' && platform !== 'dingtalk' && platform !== 'dingtalk-connector' && !['line', 'mattermost', 'clickclack', 'nextcloud-talk', 'twitch', 'nostr', 'irc', 'synology-chat', 'googlechat', 'msteams', 'whatsapp'].includes(storageKey)) {
+    if (platform !== 'qqbot' && platform !== 'feishu' && platform !== 'dingtalk' && platform !== 'dingtalk-connector' && !['line', 'mattermost', 'clickclack', 'nextcloud-talk', 'twitch', 'nostr', 'irc', 'tlon', 'synology-chat', 'googlechat', 'msteams', 'whatsapp'].includes(storageKey)) {
       preserveMessagingCredentialRefs(entry, form, currentSaved)
       // 合并模式：保留用户通过 CLI 或手动编辑的自定义字段
       applyMessagingPlatformEntry(cfg, storageKey, normalizedAccountId, entry)
@@ -5715,6 +5762,9 @@ const handlers = {
     }
     if (platform === 'irc') {
       return { valid: true, warnings: ['IRC 面板已完成基础字段校验；实际连通性请通过 Gateway 启动日志或 openclaw channels status --probe 验证。'] }
+    }
+    if (platform === 'tlon') {
+      return { valid: true, warnings: ['Tlon 面板已完成基础字段校验；实际连通性请通过 Gateway 启动日志或 openclaw channels status --probe 验证。'] }
     }
     if (platform === 'discord') {
       try {

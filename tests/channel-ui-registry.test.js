@@ -197,3 +197,28 @@ test('IRC 渠道 UI 会暴露服务器、NickServ 与频道访问配置字段', 
   assert.match(ircBlock, /pluginRequired:\s*'@openclaw\/irc@latest'/)
   assert.match(ircBlock, /pluginId:\s*'irc'/)
 })
+
+test('Tlon 渠道 UI 会暴露 Urbit 登录、频道和邀请安全配置字段', () => {
+  const tlonBlock = getRegistryBlock('tlon')
+
+  for (const field of [
+    'ship',
+    'url',
+    'code',
+    'dangerouslyAllowPrivateNetwork',
+    'groupChannels',
+    'dmAllowlist',
+    'groupInviteAllowlist',
+    'autoDiscoverChannels',
+    'showModelSignature',
+    'responsePrefix',
+    'autoAcceptDmInvites',
+    'autoAcceptGroupInvites',
+    'ownerShip',
+    'defaultAuthorizedShips',
+  ]) {
+    assert.match(tlonBlock, new RegExp(`key:\\s*'${field}'`))
+  }
+  assert.match(tlonBlock, /pluginRequired:\s*'@openclaw\/tlon@latest'/)
+  assert.match(tlonBlock, /pluginId:\s*'tlon'/)
+})
