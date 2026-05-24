@@ -129,6 +129,11 @@ test('Hermes 配置页会暴露全局显示与可靠性结构化配置字段', (
     'hm-display-resume-display',
     'hm-display-busy-input-mode',
     'hm-display-background-process-notifications',
+    'hm-display-final-response-markdown',
+    'hm-display-persistent-output-max-lines',
+    'hm-display-timestamps',
+    'hm-display-bell-on-complete',
+    'hm-display-persistent-output',
   ]) {
     assert.match(source, new RegExp(`id="${id}"`), `缺少 ${id}`)
   }

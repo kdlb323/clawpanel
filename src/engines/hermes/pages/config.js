@@ -90,6 +90,11 @@ const DISPLAY_DEFAULTS = {
   displayResumeDisplay: 'full',
   displayBusyInputMode: 'interrupt',
   displayBackgroundProcessNotifications: 'all',
+  displayFinalResponseMarkdown: 'strip',
+  displayTimestamps: false,
+  displayBellOnComplete: false,
+  displayPersistentOutput: true,
+  displayPersistentOutputMaxLines: 200,
 }
 
 const HUMAN_DELAY_DEFAULTS = {
@@ -195,6 +200,7 @@ const DISPLAY_LANGUAGE_VALUES = ['en', 'zh', 'zh-hant', 'ja', 'de', 'es', 'fr', 
 const DISPLAY_RESUME_VALUES = ['full', 'minimal']
 const DISPLAY_BUSY_INPUT_MODES = ['interrupt', 'queue', 'steer']
 const DISPLAY_BACKGROUND_PROCESS_NOTIFICATIONS = ['off', 'result', 'error', 'all']
+const DISPLAY_FINAL_RESPONSE_MARKDOWN_VALUES = ['render', 'strip', 'raw']
 const HUMAN_DELAY_MODES = ['off', 'natural', 'custom']
 const APPROVAL_MODES = ['manual', 'smart', 'off']
 const APPROVAL_CRON_MODES = ['deny', 'approve']
@@ -798,6 +804,16 @@ export function render() {
               </select>
             </label>
             <label class="hm-field">
+              <span class="hm-field-label">${t('engine.hermesDisplayConfigFinalResponseMarkdown')}</span>
+              <select id="hm-display-final-response-markdown" class="hm-input" ${disabled ? 'disabled' : ''}>
+                ${DISPLAY_FINAL_RESPONSE_MARKDOWN_VALUES.map(mode => option(`engine.hermesDisplayConfigFinalResponseMarkdown_${mode}`, mode, displayValues.displayFinalResponseMarkdown)).join('')}
+              </select>
+            </label>
+            <label class="hm-field">
+              <span class="hm-field-label">${t('engine.hermesDisplayConfigPersistentOutputMaxLines')}</span>
+              <input id="hm-display-persistent-output-max-lines" class="hm-input" type="number" inputmode="numeric" min="0" max="100000" step="1" value="${esc(displayValues.displayPersistentOutputMaxLines)}" ${disabled ? 'disabled' : ''}>
+            </label>
+            <label class="hm-field">
               <span class="hm-field-label">${t('engine.hermesDisplayConfigRuntimeFooterFields')}</span>
               <textarea id="hm-display-runtime-footer-fields" class="hm-input" ${disabled ? 'disabled' : ''} style="min-height:96px;resize:vertical">${esc(displayValues.displayRuntimeFooterFields)}</textarea>
             </label>
@@ -818,6 +834,18 @@ export function render() {
             <label class="hm-channel-check">
               <input id="hm-display-file-mutation-verifier" type="checkbox" ${displayValues.displayFileMutationVerifier ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
               <span>${t('engine.hermesDisplayConfigFileMutationVerifier')}</span>
+            </label>
+            <label class="hm-channel-check">
+              <input id="hm-display-timestamps" type="checkbox" ${displayValues.displayTimestamps ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+              <span>${t('engine.hermesDisplayConfigTimestamps')}</span>
+            </label>
+            <label class="hm-channel-check">
+              <input id="hm-display-bell-on-complete" type="checkbox" ${displayValues.displayBellOnComplete ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+              <span>${t('engine.hermesDisplayConfigBellOnComplete')}</span>
+            </label>
+            <label class="hm-channel-check">
+              <input id="hm-display-persistent-output" type="checkbox" ${displayValues.displayPersistentOutput ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+              <span>${t('engine.hermesDisplayConfigPersistentOutput')}</span>
             </label>
           </div>
           <div class="hm-channel-footnote">${t('engine.hermesDisplayConfigFootnote')}</div>
@@ -2177,6 +2205,11 @@ export function render() {
       displayResumeDisplay: el.querySelector('#hm-display-resume-display')?.value || 'full',
       displayBusyInputMode: el.querySelector('#hm-display-busy-input-mode')?.value || 'interrupt',
       displayBackgroundProcessNotifications: el.querySelector('#hm-display-background-process-notifications')?.value || 'all',
+      displayFinalResponseMarkdown: el.querySelector('#hm-display-final-response-markdown')?.value || 'strip',
+      displayTimestamps: !!el.querySelector('#hm-display-timestamps')?.checked,
+      displayBellOnComplete: !!el.querySelector('#hm-display-bell-on-complete')?.checked,
+      displayPersistentOutput: !!el.querySelector('#hm-display-persistent-output')?.checked,
+      displayPersistentOutputMaxLines: el.querySelector('#hm-display-persistent-output-max-lines')?.value || '200',
     }
     displaySaving = true
     displayError = null

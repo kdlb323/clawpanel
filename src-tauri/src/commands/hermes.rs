@@ -4234,6 +4234,7 @@ const HERMES_DISPLAY_LANGUAGE_VALUES: &[&str] = &[
 
 const HERMES_DISPLAY_BUSY_INPUT_MODES: &[&str] = &["interrupt", "queue", "steer"];
 const HERMES_DISPLAY_BACKGROUND_PROCESS_NOTIFICATIONS: &[&str] = &["off", "result", "error", "all"];
+const HERMES_DISPLAY_FINAL_RESPONSE_MARKDOWN_VALUES: &[&str] = &["render", "strip", "raw"];
 
 const HERMES_RUNTIME_FOOTER_FIELDS: &[&str] =
     &["model", "context_pct", "cwd", "duration", "tokens", "cost"];
@@ -4308,6 +4309,25 @@ fn normalize_hermes_display_background_process_notifications(
         Err("display.background_process_notifications 必须是 off、result、error 或 all".to_string())
     } else {
         Ok("all".to_string())
+    }
+}
+
+fn normalize_hermes_display_final_response_markdown(
+    value: Option<String>,
+    strict: bool,
+) -> Result<String, String> {
+    let mode = value.unwrap_or_default().trim().to_ascii_lowercase();
+    let mode = if mode.is_empty() {
+        "strip".to_string()
+    } else {
+        mode
+    };
+    if HERMES_DISPLAY_FINAL_RESPONSE_MARKDOWN_VALUES.contains(&mode.as_str()) {
+        Ok(mode)
+    } else if strict {
+        Err("display.final_response_markdown 必须是 render、strip 或 raw".to_string())
+    } else {
+        Ok("strip".to_string())
     }
 }
 
@@ -4431,6 +4451,16 @@ fn build_hermes_display_config_values(config: &serde_yaml::Value) -> Value {
             display.and_then(|map| yaml_string_field(map, "background_process_notifications")),
             false,
         ).unwrap_or_else(|_| "all".to_string()),
+        "displayFinalResponseMarkdown": normalize_hermes_display_final_response_markdown(
+            display.and_then(|map| yaml_string_field(map, "final_response_markdown")),
+            false,
+        ).unwrap_or_else(|_| "strip".to_string()),
+        "displayTimestamps": display.and_then(|map| yaml_bool_field(map, "timestamps")).unwrap_or(false),
+        "displayBellOnComplete": display.and_then(|map| yaml_bool_field(map, "bell_on_complete")).unwrap_or(false),
+        "displayPersistentOutput": display.and_then(|map| yaml_bool_field(map, "persistent_output")).unwrap_or(true),
+        "displayPersistentOutputMaxLines": display
+            .map(|map| bounded_hermes_i64(yaml_i64_field(map, "persistent_output_max_lines"), 200, 0, 100000))
+            .unwrap_or(200),
     })
 }
 
@@ -4454,6 +4484,22 @@ fn merge_hermes_display_config(config: &mut serde_yaml::Value, form: &Value) -> 
                     .map(ToString::to_string)
             }),
         true,
+    )?;
+    let final_response_markdown = normalize_hermes_display_final_response_markdown(
+        form_string(form, "displayFinalResponseMarkdown").or_else(|| {
+            current["displayFinalResponseMarkdown"]
+                .as_str()
+                .map(ToString::to_string)
+        }),
+        true,
+    )?;
+    let persistent_output_max_lines = validate_hermes_i64(
+        form_i64(form, "displayPersistentOutputMaxLines")
+            .or_else(|| current["displayPersistentOutputMaxLines"].as_i64()),
+        "display.persistent_output_max_lines",
+        200,
+        0,
+        100000,
     )?;
 
     let display = yaml_child_object(ensure_yaml_object(config)?, "display")?;
@@ -4531,6 +4577,35 @@ fn merge_hermes_display_config(config: &mut serde_yaml::Value, form: &Value) -> 
             }),
             true,
         )?),
+    );
+    display.insert(
+        yaml_key("final_response_markdown"),
+        serde_yaml::Value::String(final_response_markdown),
+    );
+    display.insert(
+        yaml_key("timestamps"),
+        serde_yaml::Value::Bool(
+            form_bool(form, "displayTimestamps")
+                .unwrap_or_else(|| current["displayTimestamps"].as_bool().unwrap_or(false)),
+        ),
+    );
+    display.insert(
+        yaml_key("bell_on_complete"),
+        serde_yaml::Value::Bool(
+            form_bool(form, "displayBellOnComplete")
+                .unwrap_or_else(|| current["displayBellOnComplete"].as_bool().unwrap_or(false)),
+        ),
+    );
+    display.insert(
+        yaml_key("persistent_output"),
+        serde_yaml::Value::Bool(
+            form_bool(form, "displayPersistentOutput")
+                .unwrap_or_else(|| current["displayPersistentOutput"].as_bool().unwrap_or(true)),
+        ),
+    );
+    display.insert(
+        yaml_key("persistent_output_max_lines"),
+        serde_yaml::Value::Number(serde_yaml::Number::from(persistent_output_max_lines)),
     );
     let runtime_footer = yaml_child_object(display, "runtime_footer")?;
     runtime_footer.insert(
@@ -14286,6 +14361,11 @@ mod hermes_display_config_tests {
         assert_eq!(values["displayResumeDisplay"], "full");
         assert_eq!(values["displayBusyInputMode"], "interrupt");
         assert_eq!(values["displayBackgroundProcessNotifications"], "all");
+        assert_eq!(values["displayFinalResponseMarkdown"], "strip");
+        assert_eq!(values["displayTimestamps"], false);
+        assert_eq!(values["displayBellOnComplete"], false);
+        assert_eq!(values["displayPersistentOutput"], true);
+        assert_eq!(values["displayPersistentOutputMaxLines"], 200);
     }
 
     #[test]
@@ -14307,6 +14387,11 @@ display:
   resume_display: minimal
   busy_input_mode: QUEUE
   background_process_notifications: ERROR
+  final_response_markdown: RAW
+  timestamps: true
+  bell_on_complete: true
+  persistent_output: false
+  persistent_output_max_lines: 80
 "#,
         )
         .unwrap();
@@ -14324,6 +14409,11 @@ display:
         assert_eq!(values["displayResumeDisplay"], "minimal");
         assert_eq!(values["displayBusyInputMode"], "queue");
         assert_eq!(values["displayBackgroundProcessNotifications"], "error");
+        assert_eq!(values["displayFinalResponseMarkdown"], "raw");
+        assert_eq!(values["displayTimestamps"], true);
+        assert_eq!(values["displayBellOnComplete"], true);
+        assert_eq!(values["displayPersistentOutput"], false);
+        assert_eq!(values["displayPersistentOutputMaxLines"], 80);
     }
 
     #[test]
@@ -14359,6 +14449,11 @@ memory:
                 "displayResumeDisplay": "minimal",
                 "displayBusyInputMode": "steer",
                 "displayBackgroundProcessNotifications": "result",
+                "displayFinalResponseMarkdown": "render",
+                "displayTimestamps": true,
+                "displayBellOnComplete": true,
+                "displayPersistentOutput": false,
+                "displayPersistentOutputMaxLines": 120,
             }),
         )
         .unwrap();
@@ -14410,6 +14505,20 @@ memory:
             config["display"]["background_process_notifications"].as_str(),
             Some("result")
         );
+        assert_eq!(
+            config["display"]["final_response_markdown"].as_str(),
+            Some("render")
+        );
+        assert_eq!(config["display"]["timestamps"].as_bool(), Some(true));
+        assert_eq!(config["display"]["bell_on_complete"].as_bool(), Some(true));
+        assert_eq!(
+            config["display"]["persistent_output"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            config["display"]["persistent_output_max_lines"].as_i64(),
+            Some(120)
+        );
     }
 
     #[test]
@@ -14449,6 +14558,20 @@ memory:
         )
         .unwrap_err();
         assert!(err.contains("display.background_process_notifications"));
+
+        let err = merge_hermes_display_config(
+            &mut config,
+            &json!({ "displayFinalResponseMarkdown": "html" }),
+        )
+        .unwrap_err();
+        assert!(err.contains("display.final_response_markdown"));
+
+        let err = merge_hermes_display_config(
+            &mut config,
+            &json!({ "displayPersistentOutputMaxLines": -1 }),
+        )
+        .unwrap_err();
+        assert!(err.contains("display.persistent_output_max_lines"));
     }
 }
 

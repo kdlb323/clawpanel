@@ -20,6 +20,11 @@ test('Hermes 显示配置读取会提供上游默认值', () => {
     displayResumeDisplay: 'full',
     displayBusyInputMode: 'interrupt',
     displayBackgroundProcessNotifications: 'all',
+    displayFinalResponseMarkdown: 'strip',
+    displayTimestamps: false,
+    displayBellOnComplete: false,
+    displayPersistentOutput: true,
+    displayPersistentOutputMaxLines: 200,
   })
 })
 
@@ -38,6 +43,11 @@ test('Hermes 显示配置读取会规范化已有字段', () => {
       resume_display: 'minimal',
       busy_input_mode: 'QUEUE',
       background_process_notifications: 'ERROR',
+      final_response_markdown: 'RAW',
+      timestamps: true,
+      bell_on_complete: true,
+      persistent_output: false,
+      persistent_output_max_lines: 80,
     },
   })
 
@@ -51,6 +61,11 @@ test('Hermes 显示配置读取会规范化已有字段', () => {
   assert.equal(values.displayResumeDisplay, 'minimal')
   assert.equal(values.displayBusyInputMode, 'queue')
   assert.equal(values.displayBackgroundProcessNotifications, 'error')
+  assert.equal(values.displayFinalResponseMarkdown, 'raw')
+  assert.equal(values.displayTimestamps, true)
+  assert.equal(values.displayBellOnComplete, true)
+  assert.equal(values.displayPersistentOutput, false)
+  assert.equal(values.displayPersistentOutputMaxLines, 80)
 })
 
 test('Hermes 显示配置保存会保留未知 YAML 并写入 display', () => {
@@ -78,6 +93,11 @@ test('Hermes 显示配置保存会保留未知 YAML 并写入 display', () => {
     displayResumeDisplay: 'minimal',
     displayBusyInputMode: 'steer',
     displayBackgroundProcessNotifications: 'result',
+    displayFinalResponseMarkdown: 'render',
+    displayTimestamps: true,
+    displayBellOnComplete: true,
+    displayPersistentOutput: false,
+    displayPersistentOutputMaxLines: 120,
   })
 
   assert.deepEqual(next.model, { provider: 'anthropic' })
@@ -95,6 +115,11 @@ test('Hermes 显示配置保存会保留未知 YAML 并写入 display', () => {
   assert.equal(next.display.resume_display, 'minimal')
   assert.equal(next.display.busy_input_mode, 'steer')
   assert.equal(next.display.background_process_notifications, 'result')
+  assert.equal(next.display.final_response_markdown, 'render')
+  assert.equal(next.display.timestamps, true)
+  assert.equal(next.display.bell_on_complete, true)
+  assert.equal(next.display.persistent_output, false)
+  assert.equal(next.display.persistent_output_max_lines, 120)
 })
 
 test('Hermes 显示配置保存会拒绝非法枚举和页脚字段', () => {
@@ -121,5 +146,13 @@ test('Hermes 显示配置保存会拒绝非法枚举和页脚字段', () => {
   assert.throws(
     () => mergeHermesDisplayConfig({}, { displayBackgroundProcessNotifications: 'silent' }),
     /display\.background_process_notifications/,
+  )
+  assert.throws(
+    () => mergeHermesDisplayConfig({}, { displayFinalResponseMarkdown: 'html' }),
+    /display\.final_response_markdown/,
+  )
+  assert.throws(
+    () => mergeHermesDisplayConfig({}, { displayPersistentOutputMaxLines: '-1' }),
+    /display\.persistent_output_max_lines/,
   )
 })

@@ -3334,6 +3334,7 @@ const HERMES_DISPLAY_STREAMING_VALUES = new Set(['inherit', 'true', 'false'])
 const HERMES_DISPLAY_RESUME_VALUES = new Set(['full', 'minimal'])
 const HERMES_DISPLAY_BUSY_INPUT_MODES = new Set(['interrupt', 'queue', 'steer'])
 const HERMES_DISPLAY_BACKGROUND_PROCESS_NOTIFICATIONS = new Set(['off', 'result', 'error', 'all'])
+const HERMES_DISPLAY_FINAL_RESPONSE_MARKDOWN_VALUES = new Set(['render', 'strip', 'raw'])
 const HERMES_DISPLAY_LANGUAGE_VALUES = new Set(['en', 'zh', 'zh-hant', 'ja', 'de', 'es', 'fr', 'tr', 'uk', 'af', 'ko', 'it', 'ga', 'pt', 'ru', 'hu'])
 const HERMES_RUNTIME_FOOTER_FIELDS = new Set(['model', 'context_pct', 'cwd', 'duration', 'tokens', 'cost'])
 
@@ -3479,6 +3480,13 @@ function normalizeHermesDisplayBackgroundProcessNotifications(value, strict = fa
   return 'all'
 }
 
+function normalizeHermesDisplayFinalResponseMarkdown(value, strict = false) {
+  const mode = String(value ?? '').trim().toLowerCase() || 'strip'
+  if (HERMES_DISPLAY_FINAL_RESPONSE_MARKDOWN_VALUES.has(mode)) return mode
+  if (strict) throw new Error('display.final_response_markdown 必须是 render、strip 或 raw')
+  return 'strip'
+}
+
 function normalizeHermesDisplayLanguage(value, strict = false) {
   const language = String(value ?? '').trim().toLowerCase() || 'en'
   if (HERMES_DISPLAY_LANGUAGE_VALUES.has(language)) return language
@@ -3532,6 +3540,11 @@ export function buildHermesDisplayConfigValues(config = {}) {
     displayResumeDisplay: normalizeHermesDisplayResume(display.resume_display, false),
     displayBusyInputMode: normalizeHermesDisplayBusyInputMode(display.busy_input_mode, false),
     displayBackgroundProcessNotifications: normalizeHermesDisplayBackgroundProcessNotifications(display.background_process_notifications, false),
+    displayFinalResponseMarkdown: normalizeHermesDisplayFinalResponseMarkdown(display.final_response_markdown, false),
+    displayTimestamps: readHermesBool(display.timestamps, false),
+    displayBellOnComplete: readHermesBool(display.bell_on_complete, false),
+    displayPersistentOutput: readHermesBool(display.persistent_output, true),
+    displayPersistentOutputMaxLines: parseHermesInteger(display.persistent_output_max_lines, 'display.persistent_output_max_lines', 200, 0, 100000, false),
   }
 }
 
@@ -3556,6 +3569,11 @@ export function mergeHermesDisplayConfig(config = {}, form = {}) {
   display.resume_display = normalizeHermesDisplayResume(Object.hasOwn(form, 'displayResumeDisplay') ? form.displayResumeDisplay : currentValues.displayResumeDisplay, true)
   display.busy_input_mode = normalizeHermesDisplayBusyInputMode(Object.hasOwn(form, 'displayBusyInputMode') ? form.displayBusyInputMode : currentValues.displayBusyInputMode, true)
   display.background_process_notifications = normalizeHermesDisplayBackgroundProcessNotifications(Object.hasOwn(form, 'displayBackgroundProcessNotifications') ? form.displayBackgroundProcessNotifications : currentValues.displayBackgroundProcessNotifications, true)
+  display.final_response_markdown = normalizeHermesDisplayFinalResponseMarkdown(Object.hasOwn(form, 'displayFinalResponseMarkdown') ? form.displayFinalResponseMarkdown : currentValues.displayFinalResponseMarkdown, true)
+  display.timestamps = formHermesBool(form, 'displayTimestamps', currentValues.displayTimestamps)
+  display.bell_on_complete = formHermesBool(form, 'displayBellOnComplete', currentValues.displayBellOnComplete)
+  display.persistent_output = formHermesBool(form, 'displayPersistentOutput', currentValues.displayPersistentOutput)
+  display.persistent_output_max_lines = parseHermesInteger(Object.hasOwn(form, 'displayPersistentOutputMaxLines') ? form.displayPersistentOutputMaxLines : currentValues.displayPersistentOutputMaxLines, 'display.persistent_output_max_lines', 200, 0, 100000, true)
   next.display = display
   return next
 }
