@@ -109,6 +109,10 @@ const IO_SAFETY_DEFAULTS = {
   toolOutputMaxLineLength: 2000,
 }
 
+const PRIVACY_DEFAULTS = {
+  redactPii: false,
+}
+
 const TERMINAL_DEFAULTS = {
   terminalBackend: 'local',
   terminalCwd: '.',
@@ -150,6 +154,7 @@ export function render() {
   let streamingValues = { ...STREAMING_DEFAULTS }
   let executionLimitsValues = { ...EXECUTION_LIMITS_DEFAULTS }
   let ioSafetyValues = { ...IO_SAFETY_DEFAULTS }
+  let privacyValues = { ...PRIVACY_DEFAULTS }
   let terminalValues = { ...TERMINAL_DEFAULTS }
   let loading = true
   let runtimeLoading = true
@@ -165,6 +170,7 @@ export function render() {
   let streamingLoading = true
   let executionLimitsLoading = true
   let ioSafetyLoading = true
+  let privacyLoading = true
   let terminalLoading = true
   let saving = false
   let runtimeSaving = false
@@ -180,6 +186,7 @@ export function render() {
   let streamingSaving = false
   let executionLimitsSaving = false
   let ioSafetySaving = false
+  let privacySaving = false
   let terminalSaving = false
   let error = null
   let runtimeError = null
@@ -195,6 +202,7 @@ export function render() {
   let streamingError = null
   let executionLimitsError = null
   let ioSafetyError = null
+  let privacyError = null
   let terminalError = null
 
   function esc(value) {
@@ -206,7 +214,7 @@ export function render() {
   }
 
   function isBusy() {
-    return loading || runtimeLoading || compressionLoading || toolGuardrailsLoading || memoryLoading || skillsLoading || quickCommandsLoading || unauthorizedDmLoading || securityLoading || displayLoading || humanDelayLoading || streamingLoading || executionLimitsLoading || ioSafetyLoading || terminalLoading || saving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || quickCommandsSaving || unauthorizedDmSaving || securitySaving || displaySaving || humanDelaySaving || streamingSaving || executionLimitsSaving || ioSafetySaving || terminalSaving
+    return loading || runtimeLoading || compressionLoading || toolGuardrailsLoading || memoryLoading || skillsLoading || quickCommandsLoading || unauthorizedDmLoading || securityLoading || displayLoading || humanDelayLoading || streamingLoading || executionLimitsLoading || ioSafetyLoading || privacyLoading || terminalLoading || saving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || quickCommandsSaving || unauthorizedDmSaving || securitySaving || displaySaving || humanDelaySaving || streamingSaving || executionLimitsSaving || ioSafetySaving || privacySaving || terminalSaving
   }
 
   function option(labelKey, value, selected) {
@@ -828,6 +836,34 @@ export function render() {
     `
   }
 
+  function renderPrivacyPanel() {
+    const disabled = loading || saving || privacyLoading || privacySaving || terminalSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || quickCommandsSaving || unauthorizedDmSaving || streamingSaving || executionLimitsSaving || ioSafetySaving
+    return `
+      <div class="hm-panel hm-config-runtime-panel hm-config-privacy-panel">
+        <div class="hm-panel-header">
+          <div>
+            <div class="hm-panel-title">${t('engine.hermesPrivacyConfigTitle')}</div>
+            <div class="hm-channel-panel-desc">${t('engine.hermesPrivacyConfigDesc')}</div>
+          </div>
+          <div class="hm-panel-actions">
+            <span class="hm-muted">${privacySaving ? t('engine.hermesConfigStatusSaving') : privacyLoading ? t('engine.hermesConfigStatusLoading') : t('engine.hermesPrivacyConfigStatusReady')}</span>
+            <button class="hm-btn hm-btn--cta hm-btn--sm" id="hm-privacy-save" ${disabled ? 'disabled' : ''}>${t('engine.hermesPrivacyConfigSave')}</button>
+          </div>
+        </div>
+        <div class="hm-panel-body">
+          ${renderError(privacyError)}
+          <div class="hm-config-check-grid">
+            <label class="hm-channel-check">
+              <input id="hm-privacy-redact-pii" type="checkbox" ${privacyValues.redactPii ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+              <span>${t('engine.hermesPrivacyConfigRedactPii')}</span>
+            </label>
+          </div>
+          <div class="hm-channel-footnote">${t('engine.hermesPrivacyConfigFootnote')}</div>
+        </div>
+      </div>
+    `
+  }
+
   function renderTerminalPanel() {
     const disabled = loading || saving || terminalLoading || terminalSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || quickCommandsSaving || unauthorizedDmSaving || streamingSaving || executionLimitsSaving
     return `
@@ -918,6 +954,7 @@ export function render() {
       ${renderStreamingPanel()}
       ${renderExecutionLimitsPanel()}
       ${renderIoSafetyPanel()}
+      ${renderPrivacyPanel()}
       ${renderCompressionPanel()}
       ${renderToolGuardrailsPanel()}
       ${renderMemoryPanel()}
@@ -959,6 +996,7 @@ export function render() {
     el.querySelector('#hm-streaming-save')?.addEventListener('click', saveStreaming)
     el.querySelector('#hm-execution-limits-save')?.addEventListener('click', saveExecutionLimits)
     el.querySelector('#hm-io-safety-save')?.addEventListener('click', saveIoSafety)
+    el.querySelector('#hm-privacy-save')?.addEventListener('click', savePrivacyConfig)
     el.querySelector('#hm-terminal-save')?.addEventListener('click', saveTerminal)
   }
 
@@ -1032,6 +1070,11 @@ export function render() {
     ioSafetyValues = { ...IO_SAFETY_DEFAULTS, ...(data?.values || {}) }
   }
 
+  async function loadPrivacyConfig() {
+    const data = await api.hermesPrivacyConfigRead()
+    privacyValues = { ...PRIVACY_DEFAULTS, ...(data?.values || {}) }
+  }
+
   async function loadTerminal() {
     const data = await api.hermesTerminalConfigRead()
     terminalValues = { ...TERMINAL_DEFAULTS, ...(data?.values || {}) }
@@ -1052,6 +1095,7 @@ export function render() {
     streamingLoading = true
     executionLimitsLoading = true
     ioSafetyLoading = true
+    privacyLoading = true
     terminalLoading = true
     error = null
     runtimeError = null
@@ -1067,6 +1111,7 @@ export function render() {
     streamingError = null
     executionLimitsError = null
     ioSafetyError = null
+    privacyError = null
     terminalError = null
     draw()
     try {
@@ -1122,6 +1167,14 @@ export function render() {
       ioSafetyError = humanizeError(err, t('engine.hermesIoSafetyLoadFailed') || 'Load input/output safety config failed')
     } finally {
       ioSafetyLoading = false
+      draw()
+    }
+    try {
+      await loadPrivacyConfig()
+    } catch (err) {
+      privacyError = humanizeError(err, t('engine.hermesPrivacyConfigLoadFailed') || 'Load privacy config failed')
+    } finally {
+      privacyLoading = false
       draw()
     }
     try {
@@ -1247,6 +1300,9 @@ export function render() {
       } catch {}
       try {
         await loadIoSafety()
+      } catch {}
+      try {
+        await loadPrivacyConfig()
       } catch {}
       try {
         await loadTerminal()
@@ -1632,6 +1688,31 @@ export function render() {
       toast(ioSafetyError, 'error')
     } finally {
       ioSafetySaving = false
+      draw()
+    }
+  }
+
+  async function savePrivacyConfig() {
+    const form = {
+      redactPii: !!el.querySelector('#hm-privacy-redact-pii')?.checked,
+    }
+    privacySaving = true
+    privacyError = null
+    draw()
+    try {
+      const result = await api.hermesPrivacyConfigSave(form)
+      privacyValues = { ...PRIVACY_DEFAULTS, ...(result?.values || form) }
+      await refreshRawAfterStructuredSave()
+      const backup = result?.backup || ''
+      toast({
+        message: t('engine.hermesPrivacyConfigSaveSuccess'),
+        hint: backup ? t('engine.hermesConfigBackupHint', { path: backup }) : '',
+      }, 'success')
+    } catch (err) {
+      privacyError = humanizeError(err, t('engine.hermesPrivacyConfigSaveFailed') || 'Save privacy config failed')
+      toast(privacyError, 'error')
+    } finally {
+      privacySaving = false
       draw()
     }
   }

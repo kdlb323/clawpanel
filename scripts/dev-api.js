@@ -3922,6 +3922,27 @@ export function mergeHermesIoSafetyConfig(config = {}, form = {}) {
   return next
 }
 
+export function buildHermesPrivacyConfigValues(config = {}) {
+  const root = config && typeof config === 'object' && !Array.isArray(config) ? config : {}
+  const privacy = root.privacy && typeof root.privacy === 'object' && !Array.isArray(root.privacy)
+    ? root.privacy
+    : {}
+  return {
+    redactPii: readHermesBool(privacy.redact_pii, false),
+  }
+}
+
+export function mergeHermesPrivacyConfig(config = {}, form = {}) {
+  const next = mergeConfigsPreservingFields({}, config && typeof config === 'object' && !Array.isArray(config) ? config : {})
+  const currentValues = buildHermesPrivacyConfigValues(next)
+  const privacy = next.privacy && typeof next.privacy === 'object' && !Array.isArray(next.privacy)
+    ? mergeConfigsPreservingFields(next.privacy, {})
+    : {}
+  privacy.redact_pii = formHermesBool(form, 'redactPii', currentValues.redactPii)
+  next.privacy = privacy
+  return next
+}
+
 export function buildHermesTerminalConfigValues(config = {}) {
   const root = config && typeof config === 'object' && !Array.isArray(config) ? config : {}
   const terminal = root.terminal && typeof root.terminal === 'object' && !Array.isArray(root.terminal)
@@ -10521,6 +10542,27 @@ const handlers = {
       configPath,
       backup,
       values: buildHermesIoSafetyConfigValues(next),
+    }
+  },
+
+  hermes_privacy_config_read() {
+    const { configPath, exists, config } = readHermesConfigYamlObject()
+    return {
+      exists,
+      configPath,
+      values: buildHermesPrivacyConfigValues(config),
+    }
+  },
+
+  hermes_privacy_config_save({ form } = {}) {
+    const { configPath, config } = readHermesConfigYamlObject()
+    const next = mergeHermesPrivacyConfig(config, form || {})
+    const backup = writeHermesConfigYamlObject(configPath, next)
+    return {
+      ok: true,
+      configPath,
+      backup,
+      values: buildHermesPrivacyConfigValues(next),
     }
   },
 

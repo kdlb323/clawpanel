@@ -4667,6 +4667,29 @@ fn merge_hermes_io_safety_config(
     Ok(())
 }
 
+fn build_hermes_privacy_config_values(config: &serde_yaml::Value) -> Value {
+    let root = config.as_mapping();
+    let privacy = root.and_then(|map| yaml_get_mapping(map, "privacy"));
+    let redact_pii = privacy
+        .and_then(|map| yaml_bool_field(map, "redact_pii"))
+        .unwrap_or(false);
+
+    serde_json::json!({
+        "redactPii": redact_pii,
+    })
+}
+
+fn merge_hermes_privacy_config(config: &mut serde_yaml::Value, form: &Value) -> Result<(), String> {
+    let current = build_hermes_privacy_config_values(config);
+    let redact_pii = form_bool(form, "redactPii")
+        .unwrap_or_else(|| current["redactPii"].as_bool().unwrap_or(false));
+
+    let root = ensure_yaml_object(config)?;
+    let privacy = yaml_child_object(root, "privacy")?;
+    privacy.insert(yaml_key("redact_pii"), serde_yaml::Value::Bool(redact_pii));
+    Ok(())
+}
+
 fn merge_hermes_execution_limits_config(
     config: &mut serde_yaml::Value,
     form: &Value,
@@ -6111,6 +6134,30 @@ pub fn hermes_io_safety_config_save(form: Value) -> Result<Value, String> {
         "configPath": config_path.to_string_lossy(),
         "backup": backup,
         "values": build_hermes_io_safety_config_values(&config),
+    }))
+}
+
+#[tauri::command]
+pub fn hermes_privacy_config_read() -> Result<Value, String> {
+    let (config_path, exists, config) = read_hermes_channel_yaml_config()?;
+    ensure_yaml_object(&mut config.clone())?;
+    Ok(serde_json::json!({
+        "exists": exists,
+        "configPath": config_path.to_string_lossy(),
+        "values": build_hermes_privacy_config_values(&config),
+    }))
+}
+
+#[tauri::command]
+pub fn hermes_privacy_config_save(form: Value) -> Result<Value, String> {
+    let (config_path, _exists, mut config) = read_hermes_channel_yaml_config()?;
+    merge_hermes_privacy_config(&mut config, &form)?;
+    let backup = write_hermes_yaml_config(&config_path, &config)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "configPath": config_path.to_string_lossy(),
+        "backup": backup,
+        "values": build_hermes_privacy_config_values(&config),
     }))
 }
 
@@ -11722,6 +11769,64 @@ streaming:
             merge_hermes_io_safety_config(&mut config, &json!({ "toolOutputMaxLineLength": 0 }))
                 .unwrap_err();
         assert!(err.contains("tool_output.max_line_length"));
+    }
+}
+
+#[cfg(test)]
+mod hermes_privacy_config_tests {
+    use super::{build_hermes_privacy_config_values, merge_hermes_privacy_config};
+    use serde_json::json;
+
+    #[test]
+    fn privacy_values_have_upstream_defaults() {
+        let config: serde_yaml::Value = serde_yaml::from_str("{}").unwrap();
+        let values = build_hermes_privacy_config_values(&config);
+        assert_eq!(values["redactPii"], false);
+    }
+
+    #[test]
+    fn privacy_values_read_yaml_fields() {
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+privacy:
+  redact_pii: true
+"#,
+        )
+        .unwrap();
+        let values = build_hermes_privacy_config_values(&config);
+        assert_eq!(values["redactPii"], true);
+    }
+
+    #[test]
+    fn merge_privacy_config_preserves_unknown_fields() {
+        let mut config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+model:
+  provider: anthropic
+privacy:
+  redact_pii: false
+  custom_flag: keep-privacy
+streaming:
+  enabled: true
+"#,
+        )
+        .unwrap();
+
+        merge_hermes_privacy_config(
+            &mut config,
+            &json!({
+                "redactPii": true,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(config["model"]["provider"].as_str(), Some("anthropic"));
+        assert_eq!(config["streaming"]["enabled"].as_bool(), Some(true));
+        assert_eq!(config["privacy"]["redact_pii"].as_bool(), Some(true));
+        assert_eq!(
+            config["privacy"]["custom_flag"].as_str(),
+            Some("keep-privacy")
+        );
     }
 }
 

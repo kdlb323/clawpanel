@@ -283,6 +283,8 @@ pub fn run() {
             hermes::hermes_execution_limits_config_save,
             hermes::hermes_io_safety_config_read,
             hermes::hermes_io_safety_config_save,
+            hermes::hermes_privacy_config_read,
+            hermes::hermes_privacy_config_save,
             hermes::hermes_terminal_config_read,
             hermes::hermes_terminal_config_save,
             hermes::hermes_lazy_deps_features,

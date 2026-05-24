@@ -150,6 +150,15 @@ test('Hermes 配置页会暴露输入输出保护结构化配置字段', () => {
   }
 })
 
+test('Hermes 配置页会暴露隐私脱敏结构化配置字段', () => {
+  for (const id of [
+    'hm-privacy-save',
+    'hm-privacy-redact-pii',
+  ]) {
+    assert.match(source, new RegExp(`id="${id}"`), `缺少 ${id}`)
+  }
+})
+
 test('Hermes 配置页会暴露终端执行结构化配置字段', () => {
   for (const id of [
     'hm-terminal-save',
@@ -184,6 +193,7 @@ test('Hermes 配置页新增结构化配置不会暴露翻译 key', () => {
     key.includes('DisplayConfig') ||
     key.includes('StreamingConfig') ||
     key.includes('ExecutionLimits') ||
+    key.includes('PrivacyConfig') ||
     key.includes('TerminalConfig')
   )))
 
