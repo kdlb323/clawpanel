@@ -49,6 +49,15 @@ test('Hermes 配置页会暴露 Skills 结构化配置字段', () => {
   }
 })
 
+test('Hermes 配置页会暴露快捷命令结构化配置字段', () => {
+  for (const id of [
+    'hm-quick-commands-save',
+    'hm-quick-commands-json',
+  ]) {
+    assert.match(source, new RegExp(`id="${id}"`), `缺少 ${id}`)
+  }
+})
+
 test('Hermes 配置页会暴露网关流式结构化配置字段', () => {
   for (const id of [
     'hm-streaming-save',
@@ -108,6 +117,7 @@ test('Hermes 配置页新增结构化配置不会暴露翻译 key', () => {
     key.includes('ToolGuardrails') ||
     key.includes('MemoryConfig') ||
     key.includes('SkillsConfig') ||
+    key.includes('QuickCommandsConfig') ||
     key.includes('StreamingConfig') ||
     key.includes('ExecutionLimits') ||
     key.includes('TerminalConfig')

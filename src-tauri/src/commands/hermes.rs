@@ -3751,6 +3751,111 @@ fn merge_hermes_skills_config(config: &mut serde_yaml::Value, form: &Value) -> R
     Ok(())
 }
 
+fn build_hermes_quick_commands_config_values(config: &serde_yaml::Value) -> Value {
+    let root = config.as_mapping();
+    let quick_commands = root
+        .and_then(|map| yaml_get(map, "quick_commands"))
+        .and_then(|value| value.as_mapping())
+        .and_then(|mapping| serde_json::to_value(mapping).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let quick_commands_json =
+        serde_json::to_string_pretty(&quick_commands).unwrap_or_else(|_| "{}".to_string());
+
+    serde_json::json!({
+        "quickCommandsJson": quick_commands_json,
+    })
+}
+
+fn validate_hermes_quick_commands(value: Value) -> Result<serde_json::Map<String, Value>, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "quick_commands 必须是 JSON 对象".to_string())?;
+    let mut normalized = serde_json::Map::new();
+    for (raw_name, raw_command) in object {
+        let name = raw_name.trim().trim_start_matches('/').to_string();
+        if name.is_empty() {
+            return Err("quick_commands 命令名不能为空".to_string());
+        }
+        let command_object = raw_command
+            .as_object()
+            .ok_or_else(|| format!("quick_commands.{name} 必须是对象"))?;
+        let mut command = command_object.clone();
+        let command_type = command
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if !matches!(command_type.as_str(), "exec" | "alias") {
+            return Err(format!("quick_commands.{name}.type 必须是 exec 或 alias"));
+        }
+        command.insert("type".to_string(), Value::String(command_type.clone()));
+        if command_type == "exec" {
+            let shell_command = command
+                .get("command")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if shell_command.is_empty() {
+                return Err(format!("quick_commands.{name}.command 不能为空"));
+            }
+            command.insert("command".to_string(), Value::String(shell_command));
+        }
+        if command_type == "alias" {
+            let target = command
+                .get("target")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if !target.starts_with('/') {
+                return Err(format!("quick_commands.{name}.target 必须以 / 开头"));
+            }
+            command.insert("target".to_string(), Value::String(target));
+        }
+        normalized.insert(name, Value::Object(command));
+    }
+    Ok(normalized)
+}
+
+fn parse_hermes_quick_commands_json(
+    raw: Option<String>,
+) -> Result<serde_json::Map<String, Value>, String> {
+    let text = raw.unwrap_or_default();
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(serde_json::Map::new());
+    }
+    let value: Value =
+        serde_json::from_str(text).map_err(|err| format!("quick_commands JSON 格式错误: {err}"))?;
+    validate_hermes_quick_commands(value)
+}
+
+fn merge_hermes_quick_commands_config(
+    config: &mut serde_yaml::Value,
+    form: &Value,
+) -> Result<(), String> {
+    let current = build_hermes_quick_commands_config_values(config);
+    let quick_commands =
+        parse_hermes_quick_commands_json(form_string(form, "quickCommandsJson").or_else(|| {
+            current["quickCommandsJson"]
+                .as_str()
+                .map(ToString::to_string)
+        }))?;
+
+    let root = ensure_yaml_object(config)?;
+    if quick_commands.is_empty() {
+        root.remove(yaml_key("quick_commands"));
+    } else {
+        let json_value = Value::Object(quick_commands);
+        let yaml_value = serde_yaml::to_value(json_value)
+            .map_err(|err| format!("quick_commands 转换 YAML 失败: {err}"))?;
+        root.insert(yaml_key("quick_commands"), yaml_value);
+    }
+    Ok(())
+}
+
 fn normalize_hermes_streaming_transport(
     value: Option<String>,
     strict: bool,
@@ -5242,6 +5347,30 @@ pub fn hermes_skills_config_save(form: Value) -> Result<Value, String> {
         "configPath": config_path.to_string_lossy(),
         "backup": backup,
         "values": build_hermes_skills_config_values(&config),
+    }))
+}
+
+#[tauri::command]
+pub fn hermes_quick_commands_config_read() -> Result<Value, String> {
+    let (config_path, exists, config) = read_hermes_channel_yaml_config()?;
+    ensure_yaml_object(&mut config.clone())?;
+    Ok(serde_json::json!({
+        "exists": exists,
+        "configPath": config_path.to_string_lossy(),
+        "values": build_hermes_quick_commands_config_values(&config),
+    }))
+}
+
+#[tauri::command]
+pub fn hermes_quick_commands_config_save(form: Value) -> Result<Value, String> {
+    let (config_path, _exists, mut config) = read_hermes_channel_yaml_config()?;
+    merge_hermes_quick_commands_config(&mut config, &form)?;
+    let backup = write_hermes_yaml_config(&config_path, &config)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "configPath": config_path.to_string_lossy(),
+        "backup": backup,
+        "values": build_hermes_quick_commands_config_values(&config),
     }))
 }
 
@@ -11135,6 +11264,137 @@ memory:
             merge_hermes_skills_config(&mut config, &json!({ "creationNudgeInterval": 10001 }))
                 .unwrap_err();
         assert!(err.contains("skills.creation_nudge_interval"));
+    }
+}
+
+#[cfg(test)]
+mod hermes_quick_commands_config_tests {
+    use super::{build_hermes_quick_commands_config_values, merge_hermes_quick_commands_config};
+    use serde_json::json;
+
+    #[test]
+    fn quick_commands_values_have_empty_defaults() {
+        let config: serde_yaml::Value = serde_yaml::from_str("{}").unwrap();
+        let values = build_hermes_quick_commands_config_values(&config);
+        assert_eq!(values["quickCommandsJson"], "{}");
+    }
+
+    #[test]
+    fn quick_commands_values_read_yaml_mapping() {
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+quick_commands:
+  status:
+    type: exec
+    command: systemctl status hermes-agent
+  restart:
+    type: alias
+    target: /gateway restart
+"#,
+        )
+        .unwrap();
+
+        let values = build_hermes_quick_commands_config_values(&config);
+        let parsed: serde_json::Value =
+            serde_json::from_str(values["quickCommandsJson"].as_str().unwrap()).unwrap();
+        assert_eq!(parsed["status"]["command"], "systemctl status hermes-agent");
+        assert_eq!(parsed["restart"]["target"], "/gateway restart");
+    }
+
+    #[test]
+    fn merge_quick_commands_config_preserves_unrelated_yaml() {
+        let mut config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+model:
+  provider: anthropic
+quick_commands:
+  old:
+    type: exec
+    command: uptime
+memory:
+  memory_enabled: true
+"#,
+        )
+        .unwrap();
+
+        merge_hermes_quick_commands_config(
+            &mut config,
+            &json!({
+                "quickCommandsJson": r#"{
+                  "status": { "type": "exec", "command": "systemctl status hermes-agent", "timeout": 10 },
+                  "restart": { "type": "alias", "target": "/gateway restart" }
+                }"#,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(config["model"]["provider"].as_str(), Some("anthropic"));
+        assert_eq!(config["memory"]["memory_enabled"].as_bool(), Some(true));
+        assert_eq!(
+            config["quick_commands"]["status"]["command"].as_str(),
+            Some("systemctl status hermes-agent")
+        );
+        assert_eq!(
+            config["quick_commands"]["status"]["timeout"].as_i64(),
+            Some(10)
+        );
+        assert_eq!(
+            config["quick_commands"]["restart"]["target"].as_str(),
+            Some("/gateway restart")
+        );
+        assert!(config["quick_commands"]["old"].is_null());
+    }
+
+    #[test]
+    fn merge_quick_commands_config_removes_empty_mapping() {
+        let mut config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+quick_commands:
+  status:
+    type: exec
+    command: uptime
+streaming:
+  enabled: true
+"#,
+        )
+        .unwrap();
+
+        merge_hermes_quick_commands_config(&mut config, &json!({ "quickCommandsJson": "{}" }))
+            .unwrap();
+
+        assert!(config["quick_commands"].is_null());
+        assert_eq!(config["streaming"]["enabled"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn merge_quick_commands_config_rejects_invalid_values() {
+        let mut config = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+        let err =
+            merge_hermes_quick_commands_config(&mut config, &json!({ "quickCommandsJson": "[" }))
+                .unwrap_err();
+        assert!(err.contains("quick_commands"));
+        let err =
+            merge_hermes_quick_commands_config(&mut config, &json!({ "quickCommandsJson": "[]" }))
+                .unwrap_err();
+        assert!(err.contains("quick_commands"));
+        let err = merge_hermes_quick_commands_config(
+            &mut config,
+            &json!({ "quickCommandsJson": r#"{ "bad": "uptime" }"# }),
+        )
+        .unwrap_err();
+        assert!(err.contains("quick_commands.bad"));
+        let err = merge_hermes_quick_commands_config(
+            &mut config,
+            &json!({ "quickCommandsJson": r#"{ "status": { "type": "exec", "command": "" } }"# }),
+        )
+        .unwrap_err();
+        assert!(err.contains("quick_commands.status.command"));
+        let err = merge_hermes_quick_commands_config(
+            &mut config,
+            &json!({ "quickCommandsJson": r#"{ "restart": { "type": "alias", "target": "gateway restart" } }"# }),
+        )
+        .unwrap_err();
+        assert!(err.contains("quick_commands.restart.target"));
     }
 }
 

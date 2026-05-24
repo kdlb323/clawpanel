@@ -267,6 +267,8 @@ pub fn run() {
             hermes::hermes_memory_config_save,
             hermes::hermes_skills_config_read,
             hermes::hermes_skills_config_save,
+            hermes::hermes_quick_commands_config_read,
+            hermes::hermes_quick_commands_config_save,
             hermes::hermes_streaming_config_read,
             hermes::hermes_streaming_config_save,
             hermes::hermes_execution_limits_config_read,

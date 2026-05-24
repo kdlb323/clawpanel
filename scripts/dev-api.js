@@ -3612,6 +3612,69 @@ export function mergeHermesSkillsConfig(config = {}, form = {}) {
   return next
 }
 
+function validateHermesQuickCommands(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('quick_commands 必须是 JSON 对象')
+  }
+  const normalized = {}
+  for (const [rawName, rawCommand] of Object.entries(value)) {
+    const name = String(rawName || '').trim().replace(/^\/+/, '')
+    if (!name) throw new Error('quick_commands 命令名不能为空')
+    if (!rawCommand || typeof rawCommand !== 'object' || Array.isArray(rawCommand)) {
+      throw new Error(`quick_commands.${name} 必须是对象`)
+    }
+    const command = mergeConfigsPreservingFields(rawCommand, {})
+    const type = String(command.type || '').trim().toLowerCase()
+    if (!['exec', 'alias'].includes(type)) {
+      throw new Error(`quick_commands.${name}.type 必须是 exec 或 alias`)
+    }
+    command.type = type
+    if (type === 'exec') {
+      const shellCommand = String(command.command || '').trim()
+      if (!shellCommand) throw new Error(`quick_commands.${name}.command 不能为空`)
+      command.command = shellCommand
+    }
+    if (type === 'alias') {
+      const target = String(command.target || '').trim()
+      if (!target.startsWith('/')) throw new Error(`quick_commands.${name}.target 必须以 / 开头`)
+      command.target = target
+    }
+    normalized[name] = command
+  }
+  return normalized
+}
+
+function parseHermesQuickCommandsJson(raw) {
+  const text = String(raw ?? '').trim()
+  if (!text) return {}
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch (err) {
+    throw new Error(`quick_commands JSON 格式错误: ${err.message}`)
+  }
+  return validateHermesQuickCommands(value)
+}
+
+export function buildHermesQuickCommandsConfigValues(config = {}) {
+  const root = config && typeof config === 'object' && !Array.isArray(config) ? config : {}
+  const quickCommands = root.quick_commands && typeof root.quick_commands === 'object' && !Array.isArray(root.quick_commands)
+    ? validateHermesQuickCommands(root.quick_commands)
+    : {}
+  return {
+    quickCommandsJson: JSON.stringify(quickCommands, null, 2),
+  }
+}
+
+export function mergeHermesQuickCommandsConfig(config = {}, form = {}) {
+  const next = mergeConfigsPreservingFields({}, config && typeof config === 'object' && !Array.isArray(config) ? config : {})
+  const currentValues = buildHermesQuickCommandsConfigValues(next)
+  const quickCommands = parseHermesQuickCommandsJson(Object.hasOwn(form, 'quickCommandsJson') ? form.quickCommandsJson : currentValues.quickCommandsJson)
+  if (Object.keys(quickCommands).length) next.quick_commands = quickCommands
+  else delete next.quick_commands
+  return next
+}
+
 export function buildHermesStreamingConfigValues(config = {}) {
   const root = config && typeof config === 'object' && !Array.isArray(config) ? config : {}
   const streaming = hermesStreamingConfigSource(root)
@@ -10094,6 +10157,27 @@ const handlers = {
       configPath,
       backup,
       values: buildHermesSkillsConfigValues(next),
+    }
+  },
+
+  hermes_quick_commands_config_read() {
+    const { configPath, exists, config } = readHermesConfigYamlObject()
+    return {
+      exists,
+      configPath,
+      values: buildHermesQuickCommandsConfigValues(config),
+    }
+  },
+
+  hermes_quick_commands_config_save({ form } = {}) {
+    const { configPath, config } = readHermesConfigYamlObject()
+    const next = mergeHermesQuickCommandsConfig(config, form || {})
+    const backup = writeHermesConfigYamlObject(configPath, next)
+    return {
+      ok: true,
+      configPath,
+      backup,
+      values: buildHermesQuickCommandsConfigValues(next),
     }
   },
 

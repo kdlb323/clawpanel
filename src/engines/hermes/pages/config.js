@@ -48,6 +48,10 @@ const SKILLS_DEFAULTS = {
   externalDirs: '',
 }
 
+const QUICK_COMMANDS_DEFAULTS = {
+  quickCommandsJson: '{}',
+}
+
 const STREAMING_DEFAULTS = {
   enabled: false,
   transport: 'edit',
@@ -98,6 +102,7 @@ export function render() {
   let toolGuardrailsValues = { ...TOOL_GUARDRAILS_DEFAULTS }
   let memoryValues = { ...MEMORY_DEFAULTS }
   let skillsValues = { ...SKILLS_DEFAULTS }
+  let quickCommandsValues = { ...QUICK_COMMANDS_DEFAULTS }
   let streamingValues = { ...STREAMING_DEFAULTS }
   let executionLimitsValues = { ...EXECUTION_LIMITS_DEFAULTS }
   let terminalValues = { ...TERMINAL_DEFAULTS }
@@ -107,6 +112,7 @@ export function render() {
   let toolGuardrailsLoading = true
   let memoryLoading = true
   let skillsLoading = true
+  let quickCommandsLoading = true
   let streamingLoading = true
   let executionLimitsLoading = true
   let terminalLoading = true
@@ -116,6 +122,7 @@ export function render() {
   let toolGuardrailsSaving = false
   let memorySaving = false
   let skillsSaving = false
+  let quickCommandsSaving = false
   let streamingSaving = false
   let executionLimitsSaving = false
   let terminalSaving = false
@@ -125,6 +132,7 @@ export function render() {
   let toolGuardrailsError = null
   let memoryError = null
   let skillsError = null
+  let quickCommandsError = null
   let streamingError = null
   let executionLimitsError = null
   let terminalError = null
@@ -138,7 +146,7 @@ export function render() {
   }
 
   function isBusy() {
-    return loading || runtimeLoading || compressionLoading || toolGuardrailsLoading || memoryLoading || skillsLoading || streamingLoading || executionLimitsLoading || terminalLoading || saving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || streamingSaving || executionLimitsSaving || terminalSaving
+    return loading || runtimeLoading || compressionLoading || toolGuardrailsLoading || memoryLoading || skillsLoading || quickCommandsLoading || streamingLoading || executionLimitsLoading || terminalLoading || saving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || quickCommandsSaving || streamingSaving || executionLimitsSaving || terminalSaving
   }
 
   function option(labelKey, value, selected) {
@@ -155,7 +163,7 @@ export function render() {
   }
 
   function renderRuntimePanel() {
-    const disabled = loading || saving || runtimeLoading || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || streamingSaving || executionLimitsSaving || terminalSaving
+    const disabled = loading || saving || runtimeLoading || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || quickCommandsSaving || streamingSaving || executionLimitsSaving || terminalSaving
     return `
       <div class="hm-panel hm-config-runtime-panel">
         <div class="hm-panel-header">
@@ -203,7 +211,7 @@ export function render() {
   }
 
   function renderCompressionPanel() {
-    const disabled = loading || saving || compressionLoading || compressionSaving || runtimeSaving || toolGuardrailsSaving || memorySaving || skillsSaving || streamingSaving || executionLimitsSaving || terminalSaving
+    const disabled = loading || saving || compressionLoading || compressionSaving || runtimeSaving || toolGuardrailsSaving || memorySaving || skillsSaving || quickCommandsSaving || streamingSaving || executionLimitsSaving || terminalSaving
     return `
       <div class="hm-panel hm-config-runtime-panel hm-config-compression-panel">
         <div class="hm-panel-header">
@@ -253,7 +261,7 @@ export function render() {
   }
 
   function renderToolGuardrailsPanel() {
-    const disabled = loading || saving || toolGuardrailsLoading || toolGuardrailsSaving || runtimeSaving || compressionSaving || memorySaving || skillsSaving || streamingSaving || executionLimitsSaving || terminalSaving
+    const disabled = loading || saving || toolGuardrailsLoading || toolGuardrailsSaving || runtimeSaving || compressionSaving || memorySaving || skillsSaving || quickCommandsSaving || streamingSaving || executionLimitsSaving || terminalSaving
     return `
       <div class="hm-panel hm-config-runtime-panel hm-config-guardrails-panel">
         <div class="hm-panel-header">
@@ -315,7 +323,7 @@ export function render() {
   }
 
   function renderMemoryPanel() {
-    const disabled = loading || saving || memoryLoading || memorySaving || skillsSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || streamingSaving || executionLimitsSaving || terminalSaving
+    const disabled = loading || saving || memoryLoading || memorySaving || skillsSaving || quickCommandsSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || streamingSaving || executionLimitsSaving || terminalSaving
     return `
       <div class="hm-panel hm-config-runtime-panel hm-config-memory-panel">
         <div class="hm-panel-header">
@@ -365,7 +373,7 @@ export function render() {
   }
 
   function renderSkillsConfigPanel() {
-    const disabled = loading || saving || skillsLoading || skillsSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || streamingSaving || executionLimitsSaving || terminalSaving
+    const disabled = loading || saving || skillsLoading || skillsSaving || quickCommandsSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || streamingSaving || executionLimitsSaving || terminalSaving
     return `
       <div class="hm-panel hm-config-runtime-panel hm-config-skills-panel">
         <div class="hm-panel-header">
@@ -396,8 +404,34 @@ export function render() {
     `
   }
 
+  function renderQuickCommandsConfigPanel() {
+    const disabled = loading || saving || quickCommandsLoading || quickCommandsSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || streamingSaving || executionLimitsSaving || terminalSaving
+    return `
+      <div class="hm-panel hm-config-runtime-panel hm-config-quick-commands-panel">
+        <div class="hm-panel-header">
+          <div>
+            <div class="hm-panel-title">${t('engine.hermesQuickCommandsConfigTitle')}</div>
+            <div class="hm-channel-panel-desc">${t('engine.hermesQuickCommandsConfigDesc')}</div>
+          </div>
+          <div class="hm-panel-actions">
+            <span class="hm-muted">${quickCommandsSaving ? t('engine.hermesConfigStatusSaving') : quickCommandsLoading ? t('engine.hermesConfigStatusLoading') : t('engine.hermesQuickCommandsConfigStatusReady')}</span>
+            <button class="hm-btn hm-btn--cta hm-btn--sm" id="hm-quick-commands-save" ${disabled ? 'disabled' : ''}>${t('engine.hermesQuickCommandsConfigSave')}</button>
+          </div>
+        </div>
+        <div class="hm-panel-body">
+          ${renderError(quickCommandsError)}
+          <label class="hm-field hm-field--wide">
+            <span class="hm-field-label">${t('engine.hermesQuickCommandsConfigJson')}</span>
+            <textarea id="hm-quick-commands-json" class="hm-input" spellcheck="false" rows="8" ${disabled ? 'disabled' : ''} style="font-family:var(--hm-font-mono);line-height:1.65;min-height:220px">${esc(quickCommandsValues.quickCommandsJson)}</textarea>
+          </label>
+          <div class="hm-channel-footnote">${t('engine.hermesQuickCommandsConfigFootnote')}</div>
+        </div>
+      </div>
+    `
+  }
+
   function renderStreamingPanel() {
-    const disabled = loading || saving || streamingLoading || streamingSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || executionLimitsSaving || terminalSaving
+    const disabled = loading || saving || streamingLoading || streamingSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || quickCommandsSaving || executionLimitsSaving || terminalSaving
     return `
       <div class="hm-panel hm-config-runtime-panel hm-config-streaming-panel">
         <div class="hm-panel-header">
@@ -449,7 +483,7 @@ export function render() {
   }
 
   function renderExecutionLimitsPanel() {
-    const disabled = loading || saving || executionLimitsLoading || executionLimitsSaving || terminalSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || streamingSaving
+    const disabled = loading || saving || executionLimitsLoading || executionLimitsSaving || terminalSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || quickCommandsSaving || streamingSaving
     return `
       <div class="hm-panel hm-config-runtime-panel hm-config-execution-limits-panel">
         <div class="hm-panel-header">
@@ -521,7 +555,7 @@ export function render() {
   }
 
   function renderTerminalPanel() {
-    const disabled = loading || saving || terminalLoading || terminalSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || streamingSaving || executionLimitsSaving
+    const disabled = loading || saving || terminalLoading || terminalSaving || runtimeSaving || compressionSaving || toolGuardrailsSaving || memorySaving || skillsSaving || quickCommandsSaving || streamingSaving || executionLimitsSaving
     return `
       <div class="hm-panel hm-config-runtime-panel hm-config-terminal-panel">
         <div class="hm-panel-header">
@@ -613,6 +647,7 @@ export function render() {
       ${renderToolGuardrailsPanel()}
       ${renderMemoryPanel()}
       ${renderSkillsConfigPanel()}
+      ${renderQuickCommandsConfigPanel()}
 
       <div class="hm-panel">
         <div class="hm-panel-header">
@@ -637,6 +672,7 @@ export function render() {
     el.querySelector('#hm-tool-guardrails-save')?.addEventListener('click', saveToolGuardrails)
     el.querySelector('#hm-memory-save')?.addEventListener('click', saveMemory)
     el.querySelector('#hm-skills-config-save')?.addEventListener('click', saveSkillsConfig)
+    el.querySelector('#hm-quick-commands-save')?.addEventListener('click', saveQuickCommandsConfig)
     el.querySelector('#hm-streaming-save')?.addEventListener('click', saveStreaming)
     el.querySelector('#hm-execution-limits-save')?.addEventListener('click', saveExecutionLimits)
     el.querySelector('#hm-terminal-save')?.addEventListener('click', saveTerminal)
@@ -672,6 +708,11 @@ export function render() {
     skillsValues = { ...SKILLS_DEFAULTS, ...(data?.values || {}) }
   }
 
+  async function loadQuickCommandsConfig() {
+    const data = await api.hermesQuickCommandsConfigRead()
+    quickCommandsValues = { ...QUICK_COMMANDS_DEFAULTS, ...(data?.values || {}) }
+  }
+
   async function loadStreaming() {
     const data = await api.hermesStreamingConfigRead()
     streamingValues = { ...STREAMING_DEFAULTS, ...(data?.values || {}) }
@@ -694,6 +735,7 @@ export function render() {
     toolGuardrailsLoading = true
     memoryLoading = true
     skillsLoading = true
+    quickCommandsLoading = true
     streamingLoading = true
     executionLimitsLoading = true
     terminalLoading = true
@@ -703,6 +745,7 @@ export function render() {
     toolGuardrailsError = null
     memoryError = null
     skillsError = null
+    quickCommandsError = null
     streamingError = null
     executionLimitsError = null
     terminalError = null
@@ -778,6 +821,14 @@ export function render() {
       skillsLoading = false
       draw()
     }
+    try {
+      await loadQuickCommandsConfig()
+    } catch (err) {
+      quickCommandsError = humanizeError(err, t('engine.hermesQuickCommandsConfigLoadFailed') || 'Load quick commands config failed')
+    } finally {
+      quickCommandsLoading = false
+      draw()
+    }
   }
 
   async function refreshRawAfterStructuredSave() {
@@ -813,6 +864,9 @@ export function render() {
       } catch {}
       try {
         await loadSkillsConfig()
+      } catch {}
+      try {
+        await loadQuickCommandsConfig()
       } catch {}
       try {
         await loadStreaming()
@@ -975,6 +1029,31 @@ export function render() {
       toast(skillsError, 'error')
     } finally {
       skillsSaving = false
+      draw()
+    }
+  }
+
+  async function saveQuickCommandsConfig() {
+    const form = {
+      quickCommandsJson: el.querySelector('#hm-quick-commands-json')?.value || '{}',
+    }
+    quickCommandsSaving = true
+    quickCommandsError = null
+    draw()
+    try {
+      const result = await api.hermesQuickCommandsConfigSave(form)
+      quickCommandsValues = { ...QUICK_COMMANDS_DEFAULTS, ...(result?.values || form) }
+      await refreshRawAfterStructuredSave()
+      const backup = result?.backup || ''
+      toast({
+        message: t('engine.hermesQuickCommandsConfigSaveSuccess'),
+        hint: backup ? t('engine.hermesConfigBackupHint', { path: backup }) : '',
+      }, 'success')
+    } catch (err) {
+      quickCommandsError = humanizeError(err, t('engine.hermesQuickCommandsConfigSaveFailed') || 'Save quick commands config failed')
+      toast(quickCommandsError, 'error')
+    } finally {
+      quickCommandsSaving = false
       draw()
     }
   }
