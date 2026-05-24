@@ -3322,6 +3322,8 @@ function normalizeHermesPlatform(platform) {
 
 const HERMES_SESSION_RESET_MODES = new Set(['both', 'idle', 'daily', 'none'])
 const HERMES_STREAMING_TRANSPORTS = new Set(['auto', 'draft', 'edit', 'off'])
+const HERMES_DISPLAY_TOOL_PROGRESS_VALUES = new Set(['off', 'new', 'all', 'verbose'])
+const HERMES_DISPLAY_STREAMING_VALUES = new Set(['inherit', 'true', 'false'])
 
 function parseHermesInteger(value, key, fallback, min, max, strict = false) {
   const raw = String(value ?? '').trim()
@@ -3378,6 +3380,58 @@ function normalizeHermesStreamingTransport(value, strict = false) {
   if (HERMES_STREAMING_TRANSPORTS.has(transport)) return transport
   if (strict) throw new Error('streaming.transport 必须是 auto、draft、edit 或 off')
   return 'edit'
+}
+
+function normalizeHermesDisplayToolProgress(value, strict = false, key = 'display.tool_progress') {
+  const progress = String(value ?? '').trim().toLowerCase() || 'all'
+  if (HERMES_DISPLAY_TOOL_PROGRESS_VALUES.has(progress)) return progress
+  if (strict) throw new Error(`${key} 必须是 off、new、all 或 verbose`)
+  return 'all'
+}
+
+function normalizeHermesDisplayStreaming(value, strict = false, key = 'display.streaming') {
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  const streaming = String(value ?? '').trim().toLowerCase() || 'inherit'
+  if (HERMES_DISPLAY_STREAMING_VALUES.has(streaming)) return streaming
+  if (strict) throw new Error(`${key} 必须是 inherit、true 或 false`)
+  return 'inherit'
+}
+
+function hermesDisplayConfigParts(config = {}, platform = '') {
+  const display = config?.display && typeof config.display === 'object' && !Array.isArray(config.display)
+    ? config.display
+    : {}
+  const platforms = display.platforms && typeof display.platforms === 'object' && !Array.isArray(display.platforms)
+    ? display.platforms
+    : {}
+  const platformDisplay = platforms[platform] && typeof platforms[platform] === 'object' && !Array.isArray(platforms[platform])
+    ? platforms[platform]
+    : {}
+  return { display, platformDisplay }
+}
+
+function putHermesChannelDisplayFields(form, config, platform) {
+  const { display, platformDisplay } = hermesDisplayConfigParts(config, platform)
+  const legacyToolProgress = display.tool_progress_overrides && typeof display.tool_progress_overrides === 'object' && !Array.isArray(display.tool_progress_overrides)
+    ? display.tool_progress_overrides[platform]
+    : undefined
+  form.displayToolProgress = normalizeHermesDisplayToolProgress(
+    platformDisplay.tool_progress ?? legacyToolProgress ?? display.tool_progress ?? 'all',
+    false,
+  )
+  form.displayShowReasoning = readHermesBool(platformDisplay.show_reasoning ?? display.show_reasoning, false)
+  form.displayToolPreviewLength = parseHermesInteger(
+    platformDisplay.tool_preview_length ?? display.tool_preview_length,
+    `display.platforms.${platform}.tool_preview_length`,
+    0,
+    0,
+    200000,
+    false,
+  )
+  form.displayStreaming = Object.hasOwn(platformDisplay, 'streaming')
+    ? normalizeHermesDisplayStreaming(platformDisplay.streaming, false)
+    : 'inherit'
+  form.displayCleanupProgress = readHermesBool(platformDisplay.cleanup_progress ?? display.cleanup_progress, false)
 }
 
 function hermesStreamingConfigSource(root) {
@@ -3801,6 +3855,7 @@ export function buildHermesChannelConfigValues(config = {}, envValues = {}) {
       putHermesCsv(form, extra, 'allow_from')
       putHermesCsv(form, extra, 'group_allow_from')
     }
+    putHermesChannelDisplayFields(form, config, platform)
     values[platform] = form
   }
   return values
@@ -3882,7 +3937,69 @@ function normalizeHermesChannelForm(platform, form = {}) {
       if (Object.hasOwn(normalized, key)) normalized[key] = csvToStringArray(normalized[key])
     }
   }
+  if (Object.hasOwn(normalized, 'displayToolProgress')) {
+    normalized.displayToolProgress = normalizeHermesDisplayToolProgress(
+      normalized.displayToolProgress,
+      true,
+      `display.platforms.${platform}.tool_progress`,
+    )
+  }
+  if (Object.hasOwn(normalized, 'displayShowReasoning')) {
+    normalized.displayShowReasoning = normalized.displayShowReasoning === true || normalized.displayShowReasoning === 'true' || normalized.displayShowReasoning === 'on'
+  }
+  if (Object.hasOwn(normalized, 'displayToolPreviewLength')) {
+    normalized.displayToolPreviewLength = parseHermesInteger(
+      normalized.displayToolPreviewLength,
+      `display.platforms.${platform}.tool_preview_length`,
+      0,
+      0,
+      200000,
+      true,
+    )
+  }
+  if (Object.hasOwn(normalized, 'displayStreaming')) {
+    normalized.displayStreaming = normalizeHermesDisplayStreaming(
+      normalized.displayStreaming,
+      true,
+      `display.platforms.${platform}.streaming`,
+    )
+  }
+  if (Object.hasOwn(normalized, 'displayCleanupProgress')) {
+    normalized.displayCleanupProgress = normalized.displayCleanupProgress === true || normalized.displayCleanupProgress === 'true' || normalized.displayCleanupProgress === 'on'
+  }
   return normalized
+}
+
+function mergeHermesChannelDisplayConfig(next, platform, normalized) {
+  const hasDisplayFields = [
+    'displayToolProgress',
+    'displayShowReasoning',
+    'displayToolPreviewLength',
+    'displayStreaming',
+    'displayCleanupProgress',
+  ].some(key => Object.hasOwn(normalized, key))
+  if (!hasDisplayFields) return
+  const display = next.display && typeof next.display === 'object' && !Array.isArray(next.display)
+    ? mergeConfigsPreservingFields(next.display, {})
+    : {}
+  const platforms = display.platforms && typeof display.platforms === 'object' && !Array.isArray(display.platforms)
+    ? mergeConfigsPreservingFields(display.platforms, {})
+    : {}
+  const current = platforms[platform] && typeof platforms[platform] === 'object' && !Array.isArray(platforms[platform])
+    ? platforms[platform]
+    : {}
+  const platformDisplay = mergeConfigsPreservingFields(current, {})
+  if (Object.hasOwn(normalized, 'displayToolProgress')) platformDisplay.tool_progress = normalized.displayToolProgress
+  if (Object.hasOwn(normalized, 'displayShowReasoning')) platformDisplay.show_reasoning = !!normalized.displayShowReasoning
+  if (Object.hasOwn(normalized, 'displayToolPreviewLength')) platformDisplay.tool_preview_length = normalized.displayToolPreviewLength
+  if (Object.hasOwn(normalized, 'displayStreaming')) {
+    if (normalized.displayStreaming === 'inherit') delete platformDisplay.streaming
+    else platformDisplay.streaming = normalized.displayStreaming === 'true'
+  }
+  if (Object.hasOwn(normalized, 'displayCleanupProgress')) platformDisplay.cleanup_progress = !!normalized.displayCleanupProgress
+  platforms[platform] = platformDisplay
+  display.platforms = platforms
+  next.display = display
 }
 
 export function mergeHermesChannelConfig(config = {}, platform, form = {}) {
@@ -3986,6 +4103,7 @@ export function mergeHermesChannelConfig(config = {}, platform, form = {}) {
     setHermesExtra(entry, normalizedPlatform === 'dingtalk' ? 'allowed_chats' : 'group_allow_from', normalized.groupAllowFrom)
   }
   next.platforms[normalizedPlatform] = entry
+  mergeHermesChannelDisplayConfig(next, normalizedPlatform, normalized)
   return next
 }
 

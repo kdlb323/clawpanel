@@ -2165,12 +2165,87 @@ const HERMES_CHANNEL_PLATFORMS: [&str; 10] = [
     "simplex",
 ];
 
+const HERMES_DISPLAY_TOOL_PROGRESS_VALUES: [&str; 4] = ["off", "new", "all", "verbose"];
+const HERMES_DISPLAY_STREAMING_VALUES: [&str; 3] = ["inherit", "true", "false"];
+
 fn normalize_hermes_channel_platform(platform: &str) -> Option<&'static str> {
     let platform = platform.trim().to_ascii_lowercase();
     HERMES_CHANNEL_PLATFORMS
         .iter()
         .copied()
         .find(|item| *item == platform)
+}
+
+fn normalize_hermes_display_tool_progress(
+    value: Option<String>,
+    strict: bool,
+    key: &str,
+) -> Result<String, String> {
+    let progress = value.unwrap_or_default().trim().to_ascii_lowercase();
+    let progress = if progress.is_empty() {
+        "all".to_string()
+    } else {
+        progress
+    };
+    if HERMES_DISPLAY_TOOL_PROGRESS_VALUES.contains(&progress.as_str()) {
+        Ok(progress)
+    } else if strict {
+        Err(format!("{key} 必须是 off、new、all 或 verbose"))
+    } else {
+        Ok("all".to_string())
+    }
+}
+
+fn normalize_hermes_display_streaming_text(
+    value: Option<String>,
+    strict: bool,
+    key: &str,
+) -> Result<String, String> {
+    let streaming = value.unwrap_or_default().trim().to_ascii_lowercase();
+    let streaming = if streaming.is_empty() {
+        "inherit".to_string()
+    } else {
+        streaming
+    };
+    if HERMES_DISPLAY_STREAMING_VALUES.contains(&streaming.as_str()) {
+        Ok(streaming)
+    } else if strict {
+        Err(format!("{key} 必须是 inherit、true 或 false"))
+    } else {
+        Ok("inherit".to_string())
+    }
+}
+
+fn normalize_hermes_display_streaming_yaml(
+    value: Option<&serde_yaml::Value>,
+    strict: bool,
+    key: &str,
+) -> Result<String, String> {
+    if let Some(value) = value {
+        if let Some(value) = value.as_bool() {
+            return Ok(if value { "true" } else { "false" }.to_string());
+        }
+        if let Some(value) = value.as_str() {
+            return normalize_hermes_display_streaming_text(Some(value.to_string()), strict, key);
+        }
+    }
+    normalize_hermes_display_streaming_text(None, strict, key)
+}
+
+fn normalize_hermes_display_streaming_json(
+    value: Option<&Value>,
+    strict: bool,
+    key: &str,
+) -> Result<String, String> {
+    if let Some(value) = value {
+        if let Some(value) = value.as_bool() {
+            return Ok(if value { "true" } else { "false" }.to_string());
+        }
+        if let Some(value) = value.as_str() {
+            return normalize_hermes_display_streaming_text(Some(value.to_string()), strict, key);
+        }
+    }
+    normalize_hermes_display_streaming_text(None, strict, key)
 }
 
 fn yaml_key(key: &str) -> serde_yaml::Value {
@@ -2348,6 +2423,79 @@ fn insert_hermes_home_channel_if_present(
     if let Some(value) = yaml_string_field(home, "name") {
         form.insert("homeChannelName".to_string(), Value::String(value));
     }
+}
+
+fn insert_hermes_channel_display_fields(
+    form: &mut serde_json::Map<String, Value>,
+    config: &serde_yaml::Value,
+    platform: &str,
+) {
+    let display = config
+        .as_mapping()
+        .and_then(|map| yaml_get_mapping(map, "display"));
+    let platform_display = display
+        .and_then(|map| yaml_get_mapping(map, "platforms"))
+        .and_then(|map| yaml_get_mapping(map, platform));
+    let legacy_tool_progress = display
+        .and_then(|map| yaml_get_mapping(map, "tool_progress_overrides"))
+        .and_then(|map| yaml_string_field(map, platform));
+    let tool_progress = normalize_hermes_display_tool_progress(
+        platform_display
+            .and_then(|map| yaml_string_field(map, "tool_progress"))
+            .or(legacy_tool_progress)
+            .or_else(|| display.and_then(|map| yaml_string_field(map, "tool_progress"))),
+        false,
+        "display.tool_progress",
+    )
+    .unwrap_or_else(|_| "all".to_string());
+    let show_reasoning = platform_display
+        .and_then(|map| yaml_bool_field(map, "show_reasoning"))
+        .or_else(|| display.and_then(|map| yaml_bool_field(map, "show_reasoning")))
+        .unwrap_or(false);
+    let tool_preview_length = bounded_hermes_i64(
+        platform_display
+            .and_then(|map| yaml_i64_field(map, "tool_preview_length"))
+            .or_else(|| display.and_then(|map| yaml_i64_field(map, "tool_preview_length"))),
+        0,
+        0,
+        200000,
+    );
+    let streaming = if let Some(platform_display) = platform_display {
+        if let Some(value) = yaml_get(platform_display, "streaming") {
+            normalize_hermes_display_streaming_yaml(
+                Some(value),
+                false,
+                "display.platforms.streaming",
+            )
+            .unwrap_or_else(|_| "inherit".to_string())
+        } else {
+            "inherit".to_string()
+        }
+    } else {
+        "inherit".to_string()
+    };
+    let cleanup_progress = platform_display
+        .and_then(|map| yaml_bool_field(map, "cleanup_progress"))
+        .or_else(|| display.and_then(|map| yaml_bool_field(map, "cleanup_progress")))
+        .unwrap_or(false);
+
+    form.insert(
+        "displayToolProgress".to_string(),
+        Value::String(tool_progress),
+    );
+    form.insert(
+        "displayShowReasoning".to_string(),
+        Value::Bool(show_reasoning),
+    );
+    form.insert(
+        "displayToolPreviewLength".to_string(),
+        Value::Number(tool_preview_length.into()),
+    );
+    form.insert("displayStreaming".to_string(), Value::String(streaming));
+    form.insert(
+        "displayCleanupProgress".to_string(),
+        Value::Bool(cleanup_progress),
+    );
 }
 
 fn build_hermes_channel_config_values(
@@ -2766,6 +2914,7 @@ fn build_hermes_channel_config_values(
             insert_json_csv_if_present(&mut form, &extra, "allow_from", "allowFrom");
             insert_json_csv_if_present(&mut form, &extra, "group_allow_from", "groupAllowFrom");
         }
+        insert_hermes_channel_display_fields(&mut form, config, platform);
         values.insert(platform.to_string(), Value::Object(form));
     }
 
@@ -2948,6 +3097,95 @@ fn set_hermes_home_channel(entry: &mut serde_yaml::Mapping, form: &Value) {
     home.insert(yaml_key("chat_id"), serde_yaml::Value::String(chat_id));
     home.insert(yaml_key("name"), serde_yaml::Value::String(name));
     entry.insert(yaml_key("home_channel"), serde_yaml::Value::Mapping(home));
+}
+
+fn merge_hermes_channel_display_config(
+    root: &mut serde_yaml::Mapping,
+    platform: &str,
+    form: &Value,
+) -> Result<(), String> {
+    let has_display_fields = [
+        "displayToolProgress",
+        "displayShowReasoning",
+        "displayToolPreviewLength",
+        "displayStreaming",
+        "displayCleanupProgress",
+    ]
+    .iter()
+    .any(|key| form.get(*key).is_some());
+    if !has_display_fields {
+        return Ok(());
+    }
+
+    let tool_progress = if form.get("displayToolProgress").is_some() {
+        Some(normalize_hermes_display_tool_progress(
+            form_string(form, "displayToolProgress"),
+            true,
+            &format!("display.platforms.{platform}.tool_progress"),
+        )?)
+    } else {
+        None
+    };
+    let show_reasoning = if form.get("displayShowReasoning").is_some() {
+        Some(form_bool(form, "displayShowReasoning").unwrap_or(false))
+    } else {
+        None
+    };
+    let tool_preview_length = if form.get("displayToolPreviewLength").is_some() {
+        Some(validate_hermes_i64(
+            form_i64(form, "displayToolPreviewLength"),
+            &format!("display.platforms.{platform}.tool_preview_length"),
+            0,
+            0,
+            200000,
+        )?)
+    } else {
+        None
+    };
+    let streaming = if form.get("displayStreaming").is_some() {
+        Some(normalize_hermes_display_streaming_json(
+            form.get("displayStreaming"),
+            true,
+            &format!("display.platforms.{platform}.streaming"),
+        )?)
+    } else {
+        None
+    };
+    let cleanup_progress = if form.get("displayCleanupProgress").is_some() {
+        Some(form_bool(form, "displayCleanupProgress").unwrap_or(false))
+    } else {
+        None
+    };
+
+    let display = yaml_child_object(root, "display")?;
+    let platforms = yaml_child_object(display, "platforms")?;
+    let platform_display = yaml_child_object(platforms, platform)?;
+    if let Some(value) = tool_progress {
+        platform_display.insert(yaml_key("tool_progress"), serde_yaml::Value::String(value));
+    }
+    if let Some(value) = show_reasoning {
+        platform_display.insert(yaml_key("show_reasoning"), serde_yaml::Value::Bool(value));
+    }
+    if let Some(value) = tool_preview_length {
+        platform_display.insert(
+            yaml_key("tool_preview_length"),
+            serde_yaml::Value::Number(value.into()),
+        );
+    }
+    if let Some(value) = streaming {
+        if value == "inherit" {
+            platform_display.remove(yaml_key("streaming"));
+        } else {
+            platform_display.insert(
+                yaml_key("streaming"),
+                serde_yaml::Value::Bool(value == "true"),
+            );
+        }
+    }
+    if let Some(value) = cleanup_progress {
+        platform_display.insert(yaml_key("cleanup_progress"), serde_yaml::Value::Bool(value));
+    }
+    Ok(())
 }
 
 fn split_csv_items(value: &str) -> Vec<String> {
@@ -3660,6 +3898,7 @@ fn merge_hermes_channel_config(
     let platform = normalize_hermes_channel_platform(platform)
         .ok_or_else(|| format!("不支持的 Hermes 渠道: {platform}"))?;
     let root = ensure_yaml_object(config)?;
+    merge_hermes_channel_display_config(root, platform, form)?;
     let platforms = yaml_child_object(root, "platforms")?;
     let entry = yaml_child_object(platforms, platform)?;
 
@@ -10676,5 +10915,159 @@ platforms:
         )));
         assert!(env.contains(&("LINE_ALLOWED_GROUPS".to_string(), "C1".to_string())));
         assert!(env.contains(&("LINE_HOME_CHANNEL".to_string(), "U-home".to_string())));
+    }
+
+    #[test]
+    fn channel_display_values_read_platform_overrides_and_legacy_fallback() {
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+display:
+  tool_progress: all
+  show_reasoning: false
+  cleanup_progress: false
+  tool_progress_overrides:
+    discord: off
+  platforms:
+    telegram:
+      tool_progress: new
+      show_reasoning: true
+      tool_preview_length: 80
+      streaming: false
+      cleanup_progress: true
+      custom_flag: keep-me
+"#,
+        )
+        .unwrap();
+
+        let values = build_hermes_channel_config_values(&config, &HashMap::new());
+
+        assert_eq!(values["telegram"]["displayToolProgress"], "new");
+        assert_eq!(values["telegram"]["displayShowReasoning"], true);
+        assert_eq!(values["telegram"]["displayToolPreviewLength"], 80);
+        assert_eq!(values["telegram"]["displayStreaming"], "false");
+        assert_eq!(values["telegram"]["displayCleanupProgress"], true);
+        assert_eq!(values["discord"]["displayToolProgress"], "off");
+        assert_eq!(values["discord"]["displayStreaming"], "inherit");
+    }
+
+    #[test]
+    fn merge_channel_display_writes_platform_overrides_and_preserves_unknown_fields() {
+        let mut config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+display:
+  tool_progress: all
+  tool_progress_overrides:
+    telegram: off
+  platforms:
+    telegram:
+      tool_progress: new
+      streaming: false
+      custom_flag: keep-me
+      runtime_footer:
+        enabled: true
+platforms:
+  telegram:
+    enabled: true
+    extra:
+      unknown_option: keep-platform
+"#,
+        )
+        .unwrap();
+
+        merge_hermes_channel_config(
+            &mut config,
+            "telegram",
+            &json!({
+                "enabled": true,
+                "botToken": "",
+                "displayToolProgress": "verbose",
+                "displayShowReasoning": false,
+                "displayToolPreviewLength": "120",
+                "displayStreaming": "inherit",
+                "displayCleanupProgress": false,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(config["display"]["tool_progress"].as_str(), Some("all"));
+        assert_eq!(
+            config["display"]["tool_progress_overrides"]["telegram"].as_str(),
+            Some("off")
+        );
+        assert_eq!(
+            config["display"]["platforms"]["telegram"]["tool_progress"].as_str(),
+            Some("verbose")
+        );
+        assert_eq!(
+            config["display"]["platforms"]["telegram"]["show_reasoning"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            config["display"]["platforms"]["telegram"]["tool_preview_length"].as_i64(),
+            Some(120)
+        );
+        assert_eq!(
+            config["display"]["platforms"]["telegram"]["streaming"],
+            serde_yaml::Value::Null
+        );
+        assert_eq!(
+            config["display"]["platforms"]["telegram"]["cleanup_progress"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            config["display"]["platforms"]["telegram"]["custom_flag"].as_str(),
+            Some("keep-me")
+        );
+        assert_eq!(
+            config["display"]["platforms"]["telegram"]["runtime_footer"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            config["platforms"]["telegram"]["extra"]["unknown_option"].as_str(),
+            Some("keep-platform")
+        );
+    }
+
+    #[test]
+    fn merge_channel_display_rejects_invalid_values() {
+        let mut config = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+        let err = merge_hermes_channel_config(
+            &mut config,
+            "telegram",
+            &json!({
+                "enabled": true,
+                "displayToolProgress": "everything",
+                "displayToolPreviewLength": 80,
+                "displayStreaming": "inherit",
+            }),
+        )
+        .unwrap_err();
+        assert!(err.contains("display.platforms.telegram.tool_progress"));
+
+        let err = merge_hermes_channel_config(
+            &mut config,
+            "telegram",
+            &json!({
+                "enabled": true,
+                "displayToolProgress": "all",
+                "displayToolPreviewLength": 200001,
+                "displayStreaming": "inherit",
+            }),
+        )
+        .unwrap_err();
+        assert!(err.contains("display.platforms.telegram.tool_preview_length"));
+
+        let err = merge_hermes_channel_config(
+            &mut config,
+            "telegram",
+            &json!({
+                "enabled": true,
+                "displayToolProgress": "all",
+                "displayToolPreviewLength": 80,
+                "displayStreaming": "global",
+            }),
+        )
+        .unwrap_err();
+        assert!(err.contains("display.platforms.telegram.streaming"));
     }
 }

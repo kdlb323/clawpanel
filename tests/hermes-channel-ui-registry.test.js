@@ -68,3 +68,34 @@ test('Hermes bundled plugin 渠道页新增平台不会暴露翻译 key', () => 
     assert.notEqual(t(key), key, `${key} 缺少运行时翻译`)
   }
 })
+
+test('Hermes 渠道页会暴露平台级显示和进度策略入口', () => {
+  for (const field of [
+    'displayToolProgress',
+    'displayShowReasoning',
+    'displayToolPreviewLength',
+    'displayStreaming',
+    'displayCleanupProgress',
+  ]) {
+    assert.match(source, new RegExp(`key:\\s*'${field}'`), `缺少 ${field} 显示策略字段`)
+  }
+
+  for (const key of [
+    'engine.hermesChannelDisplayBehavior',
+    'engine.hermesChannelDisplayHint',
+    'engine.hermesChannelDisplayToolProgress',
+    'engine.hermesChannelDisplayToolProgressOff',
+    'engine.hermesChannelDisplayToolProgressNew',
+    'engine.hermesChannelDisplayToolProgressAll',
+    'engine.hermesChannelDisplayToolProgressVerbose',
+    'engine.hermesChannelDisplayStreaming',
+    'engine.hermesChannelDisplayStreamingInherit',
+    'engine.hermesChannelDisplayStreamingOn',
+    'engine.hermesChannelDisplayStreamingOff',
+    'engine.hermesChannelDisplayToolPreviewLength',
+    'engine.hermesChannelDisplayShowReasoning',
+    'engine.hermesChannelDisplayCleanupProgress',
+  ]) {
+    assert.notEqual(t(key), key, `${key} 缺少运行时翻译`)
+  }
+})

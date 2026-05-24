@@ -6849,6 +6849,13 @@ body[data-active-engine="hermes"][data-theme="dark"] {
   font-weight: 500;
   color: var(--hm-text-primary);
 }
+[data-engine="hermes"] .hm-channel-section-hint {
+  margin-top: 6px;
+  color: var(--hm-text-tertiary);
+  font-size: 12.5px;
+  line-height: 1.6;
+  max-width: 760px;
+}
 [data-engine="hermes"] .hm-channel-textarea {
   min-height: 104px;
   height: auto;

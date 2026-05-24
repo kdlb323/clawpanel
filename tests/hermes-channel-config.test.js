@@ -651,3 +651,105 @@ test('Hermes 插件平台保存会写入运行时读取的 YAML 字段和环境�
   assert.equal(env.SIMPLEX_WS_URL, 'ws://127.0.0.1:5225')
   assert.equal(env.SIMPLEX_ALLOW_ALL_USERS, 'true')
 })
+
+test('Hermes 渠道读取会回显平台级显示和进度策略', () => {
+  const values = buildHermesChannelConfigValues({
+    display: {
+      tool_progress: 'all',
+      show_reasoning: false,
+      cleanup_progress: false,
+      tool_progress_overrides: {
+        discord: 'off',
+      },
+      platforms: {
+        telegram: {
+          tool_progress: 'new',
+          show_reasoning: true,
+          tool_preview_length: 80,
+          streaming: false,
+          cleanup_progress: true,
+          custom_flag: 'keep-me',
+        },
+      },
+    },
+  })
+
+  assert.equal(values.telegram.displayToolProgress, 'new')
+  assert.equal(values.telegram.displayShowReasoning, true)
+  assert.equal(values.telegram.displayToolPreviewLength, 80)
+  assert.equal(values.telegram.displayStreaming, 'false')
+  assert.equal(values.telegram.displayCleanupProgress, true)
+  assert.equal(values.discord.displayToolProgress, 'off')
+  assert.equal(values.discord.displayStreaming, 'inherit')
+})
+
+test('Hermes 渠道保存会写入 display.platforms 平台覆盖并保留未知字段', () => {
+  const next = mergeHermesChannelConfig({
+    display: {
+      tool_progress: 'all',
+      tool_progress_overrides: {
+        telegram: 'off',
+      },
+      platforms: {
+        telegram: {
+          tool_progress: 'new',
+          streaming: false,
+          custom_flag: 'keep-me',
+          runtime_footer: {
+            enabled: true,
+          },
+        },
+      },
+    },
+    platforms: {
+      telegram: {
+        enabled: true,
+        extra: {
+          unknown_option: 'keep-platform',
+        },
+      },
+    },
+  }, 'telegram', {
+    enabled: true,
+    botToken: '',
+    displayToolProgress: 'verbose',
+    displayShowReasoning: false,
+    displayToolPreviewLength: '120',
+    displayStreaming: 'inherit',
+    displayCleanupProgress: false,
+  })
+
+  assert.equal(next.display.tool_progress, 'all')
+  assert.equal(next.display.tool_progress_overrides.telegram, 'off')
+  assert.equal(next.display.platforms.telegram.tool_progress, 'verbose')
+  assert.equal(next.display.platforms.telegram.show_reasoning, false)
+  assert.equal(next.display.platforms.telegram.tool_preview_length, 120)
+  assert.equal(next.display.platforms.telegram.streaming, undefined)
+  assert.equal(next.display.platforms.telegram.cleanup_progress, false)
+  assert.equal(next.display.platforms.telegram.custom_flag, 'keep-me')
+  assert.deepEqual(next.display.platforms.telegram.runtime_footer, { enabled: true })
+  assert.equal(next.platforms.telegram.extra.unknown_option, 'keep-platform')
+})
+
+test('Hermes 渠道显示策略保存会拒绝无效选项和越界预览长度', () => {
+  assert.throws(() => mergeHermesChannelConfig({}, 'telegram', {
+    enabled: true,
+    displayToolProgress: 'everything',
+    displayToolPreviewLength: 80,
+    displayStreaming: 'inherit',
+  }), /display\.platforms\.telegram\.tool_progress/)
+
+  assert.throws(() => mergeHermesChannelConfig({}, 'telegram', {
+    enabled: true,
+    displayToolProgress: 'all',
+    displayToolPreviewLength: 200001,
+    displayStreaming: 'inherit',
+  }), /display\.platforms\.telegram\.tool_preview_length/)
+
+  assert.throws(() => mergeHermesChannelConfig({}, 'telegram', {
+    enabled: true,
+    displayToolProgress: 'all',
+    displayToolPreviewLength: 80,
+    displayStreaming: 'global',
+  }), /display\.platforms\.telegram\.streaming/)
+})

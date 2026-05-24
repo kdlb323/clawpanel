@@ -197,6 +197,36 @@ const LEGACY_POLICY_FIELDS = [
   { key: 'groupAllowFrom', labelKey: 'engine.hermesChannelGroupAllowFrom', type: 'textarea', placeholderKey: 'engine.hermesChannelGroupAllowFromPlaceholder' },
 ]
 
+const DISPLAY_FIELDS = [
+  {
+    key: 'displayToolProgress',
+    labelKey: 'engine.hermesChannelDisplayToolProgress',
+    type: 'select',
+    options: [
+      ['off', 'engine.hermesChannelDisplayToolProgressOff'],
+      ['new', 'engine.hermesChannelDisplayToolProgressNew'],
+      ['all', 'engine.hermesChannelDisplayToolProgressAll'],
+      ['verbose', 'engine.hermesChannelDisplayToolProgressVerbose'],
+    ],
+  },
+  {
+    key: 'displayStreaming',
+    labelKey: 'engine.hermesChannelDisplayStreaming',
+    type: 'select',
+    options: [
+      ['inherit', 'engine.hermesChannelDisplayStreamingInherit'],
+      ['true', 'engine.hermesChannelDisplayStreamingOn'],
+      ['false', 'engine.hermesChannelDisplayStreamingOff'],
+    ],
+  },
+  { key: 'displayToolPreviewLength', labelKey: 'engine.hermesChannelDisplayToolPreviewLength', type: 'number', placeholder: '0' },
+]
+
+const DISPLAY_TOGGLES = [
+  { key: 'displayShowReasoning', labelKey: 'engine.hermesChannelDisplayShowReasoning', type: 'checkbox' },
+  { key: 'displayCleanupProgress', labelKey: 'engine.hermesChannelDisplayCleanupProgress', type: 'checkbox' },
+]
+
 function esc(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -211,7 +241,14 @@ function channelMeta(id) {
 
 function defaultForm(platform) {
   const channel = channelMeta(platform)
-  const form = { enabled: false }
+  const form = {
+    enabled: false,
+    displayToolProgress: 'all',
+    displayShowReasoning: false,
+    displayToolPreviewLength: 0,
+    displayStreaming: 'inherit',
+    displayCleanupProgress: false,
+  }
   if (!channel.policyFields) {
     form.dmPolicy = 'pair'
     form.groupPolicy = 'allowlist'
@@ -419,6 +456,19 @@ export function render() {
                     ${policyToggles.map(field => renderField(field, form, disabled)).join('')}
                   </div>
                 ` : ''}
+              </div>
+
+              <div class="hm-channel-section">
+                <div>
+                  <div class="hm-channel-section-title">${esc(t('engine.hermesChannelDisplayBehavior'))}</div>
+                  <div class="hm-channel-section-hint">${esc(t('engine.hermesChannelDisplayHint'))}</div>
+                </div>
+                <div class="hm-field-row">
+                  ${DISPLAY_FIELDS.map(field => renderField(field, form, disabled)).join('')}
+                </div>
+                <div class="hm-channel-toggle-grid">
+                  ${DISPLAY_TOGGLES.map(field => renderField(field, form, disabled)).join('')}
+                </div>
               </div>
 
               ${(channel.advancedFields || []).length ? `
