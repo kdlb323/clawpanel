@@ -219,7 +219,7 @@ function normalizeDefaultModelConfig(config) {
 }
 
 async function loadDashboardData(page, fullRefresh = false) {
-  // 并发保护：如果上一次加载仍在进行，跳过本次（fullRefresh 除外）
+  // 串行化：多次触发会排队执行；_dashboardLoadSeq 在排队时仍会递增，内层需在写配置前检查避免过期写入
   const loadSeq = ++_dashboardLoadSeq
   _dashboardLoadChain = _dashboardLoadChain.catch(() => {}).then(() => _loadDashboardDataInner(page, fullRefresh, loadSeq))
   return _dashboardLoadChain
@@ -246,6 +246,7 @@ async function _loadDashboardDataInner(page, fullRefresh, loadSeq) {
 
   // 第一波：服务状态 + 配置 + 版本 → 立即渲染统计卡片
   const [servicesRes, configRes, panelConfigRes] = await coreP
+  if (loadSeq !== _dashboardLoadSeq || !page.isConnected) return
   const services = servicesRes.status === 'fulfilled' ? servicesRes.value : []
   let version = _dashboardVersionCache || {}
   let config = configRes.status === 'fulfilled' ? configRes.value : null
@@ -273,6 +274,7 @@ async function _loadDashboardDataInner(page, fullRefresh, loadSeq) {
     if (needsPatch) {
       try {
         const freshConfig = await api.readOpenclawConfig()
+        if (loadSeq !== _dashboardLoadSeq || !page.isConnected) return
         let patched = false
         if (!freshConfig.gateway) freshConfig.gateway = {}
         if (!freshConfig.gateway.mode) { freshConfig.gateway.mode = 'local'; patched = true }
