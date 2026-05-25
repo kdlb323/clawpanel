@@ -3345,6 +3345,19 @@ const HERMES_DISPLAY_BACKGROUND_PROCESS_NOTIFICATIONS = new Set(['off', 'result'
 const HERMES_DISPLAY_FINAL_RESPONSE_MARKDOWN_VALUES = new Set(['render', 'strip', 'raw'])
 const HERMES_DISPLAY_LANGUAGE_VALUES = new Set(['en', 'zh', 'zh-hant', 'ja', 'de', 'es', 'fr', 'tr', 'uk', 'af', 'ko', 'it', 'ga', 'pt', 'ru', 'hu'])
 const HERMES_RUNTIME_FOOTER_FIELDS = new Set(['model', 'context_pct', 'cwd', 'duration', 'tokens', 'cost'])
+const HERMES_HOOK_EVENTS = new Set([
+  'pre_tool_call',
+  'post_tool_call',
+  'pre_llm_call',
+  'post_llm_call',
+  'pre_api_request',
+  'post_api_request',
+  'on_session_start',
+  'on_session_end',
+  'on_session_finalize',
+  'on_session_reset',
+  'subagent_stop',
+])
 const HERMES_DEFAULT_PLATFORM_TOOLSETS = {
   cli: ['hermes-cli'],
   telegram: ['hermes-telegram'],
@@ -4206,6 +4219,81 @@ export function mergeHermesQuickCommandsConfig(config = {}, form = {}) {
   const quickCommands = parseHermesQuickCommandsJson(Object.hasOwn(form, 'quickCommandsJson') ? form.quickCommandsJson : currentValues.quickCommandsJson)
   if (Object.keys(quickCommands).length) next.quick_commands = quickCommands
   else delete next.quick_commands
+  return next
+}
+
+function normalizeHermesHookTimeout(entry, key) {
+  if (!Object.hasOwn(entry, 'timeout') || entry.timeout == null || entry.timeout === '') {
+    delete entry.timeout
+    return
+  }
+  entry.timeout = parseHermesInteger(entry.timeout, `${key}.timeout`, 30, 1, 86400, true)
+}
+
+function validateHermesHooks(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('hooks 必须是 JSON 对象')
+  }
+  const normalized = {}
+  for (const [rawEvent, rawEntries] of Object.entries(value)) {
+    const event = String(rawEvent || '').trim()
+    if (!HERMES_HOOK_EVENTS.has(event)) {
+      throw new Error(`hooks.${event || '<empty>'} 事件名不受支持`)
+    }
+    if (!Array.isArray(rawEntries)) {
+      throw new Error(`hooks.${event} 必须是数组`)
+    }
+    const entries = rawEntries.map((rawEntry, index) => {
+      const key = `hooks.${event}.${index}`
+      if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) {
+        throw new Error(`${key} 必须是 JSON 对象`)
+      }
+      const entry = mergeConfigsPreservingFields(rawEntry, {})
+      const command = typeof entry.command === 'string' ? entry.command.trim() : ''
+      if (!command) throw new Error(`${key}.command 不能为空`)
+      entry.command = command
+      if (Object.hasOwn(entry, 'matcher') && entry.matcher != null) {
+        if (typeof entry.matcher !== 'string') throw new Error(`${key}.matcher 必须是字符串`)
+        entry.matcher = entry.matcher.trim()
+      }
+      normalizeHermesHookTimeout(entry, key)
+      return entry
+    })
+    if (entries.length) normalized[event] = entries
+  }
+  return normalized
+}
+
+function parseHermesHooksJson(raw) {
+  const text = String(raw ?? '').trim()
+  if (!text) return {}
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch (err) {
+    throw new Error(`hooks JSON 格式错误: ${err.message}`)
+  }
+  return validateHermesHooks(value)
+}
+
+export function buildHermesHooksConfigValues(config = {}) {
+  const root = config && typeof config === 'object' && !Array.isArray(config) ? config : {}
+  const hooks = root.hooks && typeof root.hooks === 'object' && !Array.isArray(root.hooks)
+    ? validateHermesHooks(root.hooks)
+    : {}
+  return {
+    hooksAutoAccept: readHermesBool(root.hooks_auto_accept, false),
+    hooksJson: JSON.stringify(hooks, null, 2),
+  }
+}
+
+export function mergeHermesHooksConfig(config = {}, form = {}) {
+  const next = mergeConfigsPreservingFields({}, config && typeof config === 'object' && !Array.isArray(config) ? config : {})
+  const currentValues = buildHermesHooksConfigValues(next)
+  const hooks = parseHermesHooksJson(Object.hasOwn(form, 'hooksJson') ? form.hooksJson : currentValues.hooksJson)
+  next.hooks_auto_accept = formHermesBool(form, 'hooksAutoAccept', currentValues.hooksAutoAccept)
+  if (Object.keys(hooks).length) next.hooks = hooks
+  else delete next.hooks
   return next
 }
 
@@ -11344,6 +11432,27 @@ const handlers = {
       configPath,
       backup,
       values: buildHermesQuickCommandsConfigValues(next),
+    }
+  },
+
+  hermes_hooks_config_read() {
+    const { configPath, exists, config } = readHermesConfigYamlObject()
+    return {
+      exists,
+      configPath,
+      values: buildHermesHooksConfigValues(config),
+    }
+  },
+
+  hermes_hooks_config_save({ form } = {}) {
+    const { configPath, config } = readHermesConfigYamlObject()
+    const next = mergeHermesHooksConfig(config, form || {})
+    const backup = writeHermesConfigYamlObject(configPath, next)
+    return {
+      ok: true,
+      configPath,
+      backup,
+      values: buildHermesHooksConfigValues(next),
     }
   },
 

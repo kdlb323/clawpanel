@@ -4407,6 +4407,155 @@ fn merge_hermes_quick_commands_config(
     Ok(())
 }
 
+fn is_hermes_hook_event(value: &str) -> bool {
+    matches!(
+        value,
+        "pre_tool_call"
+            | "post_tool_call"
+            | "pre_llm_call"
+            | "post_llm_call"
+            | "pre_api_request"
+            | "post_api_request"
+            | "on_session_start"
+            | "on_session_end"
+            | "on_session_finalize"
+            | "on_session_reset"
+            | "subagent_stop"
+    )
+}
+
+fn normalize_hermes_hook_timeout(
+    entry: &mut serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<(), String> {
+    if !entry.contains_key("timeout")
+        || entry.get("timeout").is_some_and(|value| {
+            value.is_null() || value.as_str().is_some_and(|text| text.trim().is_empty())
+        })
+    {
+        entry.remove("timeout");
+        return Ok(());
+    }
+    let value = entry.get("timeout").cloned().unwrap_or(Value::Null);
+    let parsed = if let Some(value) = value.as_i64() {
+        Some(value)
+    } else if let Some(value) = value.as_u64() {
+        i64::try_from(value).ok()
+    } else if let Some(value) = value.as_str() {
+        value.trim().parse::<i64>().ok()
+    } else {
+        None
+    };
+    let parsed = parsed.ok_or_else(|| format!("{key}.timeout 必须是整数"))?;
+    let parsed = validate_hermes_i64(Some(parsed), &format!("{key}.timeout"), 30, 1, 86400)?;
+    entry.insert("timeout".to_string(), Value::Number(parsed.into()));
+    Ok(())
+}
+
+fn validate_hermes_hooks(value: &Value) -> Result<serde_json::Map<String, Value>, String> {
+    let Some(map) = value.as_object() else {
+        return Err("hooks 必须是 JSON 对象".to_string());
+    };
+    let mut normalized = serde_json::Map::new();
+    for (raw_event, raw_entries) in map {
+        let event = raw_event.trim();
+        if !is_hermes_hook_event(event) {
+            return Err(format!(
+                "hooks.{} 事件名不受支持",
+                if event.is_empty() {
+                    "<empty>"
+                } else {
+                    raw_event
+                }
+            ));
+        }
+        let Some(entries) = raw_entries.as_array() else {
+            return Err(format!("hooks.{event} 必须是数组"));
+        };
+        let mut normalized_entries = Vec::new();
+        for (index, raw_entry) in entries.iter().enumerate() {
+            let key = format!("hooks.{event}.{index}");
+            let Some(config) = raw_entry.as_object() else {
+                return Err(format!("{key} 必须是 JSON 对象"));
+            };
+            let mut entry = config.clone();
+            let command = entry
+                .get("command")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if command.is_empty() {
+                return Err(format!("{key}.command 不能为空"));
+            }
+            entry.insert("command".to_string(), Value::String(command));
+            if let Some(matcher) = entry.get("matcher") {
+                let Some(matcher) = matcher.as_str() else {
+                    return Err(format!("{key}.matcher 必须是字符串"));
+                };
+                entry.insert(
+                    "matcher".to_string(),
+                    Value::String(matcher.trim().to_string()),
+                );
+            }
+            normalize_hermes_hook_timeout(&mut entry, &key)?;
+            normalized_entries.push(Value::Object(entry));
+        }
+        if !normalized_entries.is_empty() {
+            normalized.insert(event.to_string(), Value::Array(normalized_entries));
+        }
+    }
+    Ok(normalized)
+}
+
+fn parse_hermes_hooks_json(raw: Option<String>) -> Result<serde_json::Map<String, Value>, String> {
+    let text = raw.unwrap_or_default().trim().to_string();
+    if text.is_empty() {
+        return Ok(serde_json::Map::new());
+    }
+    let value: Value =
+        serde_json::from_str(&text).map_err(|err| format!("hooks JSON 格式错误: {err}"))?;
+    validate_hermes_hooks(&value)
+}
+
+fn build_hermes_hooks_config_values(config: &serde_yaml::Value) -> Value {
+    let root = config.as_mapping();
+    let hooks = root
+        .and_then(|map| map.get(yaml_key("hooks")))
+        .and_then(|value| serde_json::to_value(value).ok())
+        .and_then(|value| validate_hermes_hooks(&value).ok())
+        .unwrap_or_default();
+
+    serde_json::json!({
+        "hooksAutoAccept": root.and_then(|map| yaml_bool_field(map, "hooks_auto_accept")).unwrap_or(false),
+        "hooksJson": serde_json::to_string_pretty(&Value::Object(hooks)).unwrap_or_else(|_| "{}".to_string()),
+    })
+}
+
+fn merge_hermes_hooks_config(config: &mut serde_yaml::Value, form: &Value) -> Result<(), String> {
+    let current = build_hermes_hooks_config_values(config);
+    let hooks = parse_hermes_hooks_json(
+        form_string(form, "hooksJson")
+            .or_else(|| current["hooksJson"].as_str().map(ToString::to_string)),
+    )?;
+    let hooks_auto_accept = form_bool(form, "hooksAutoAccept")
+        .unwrap_or_else(|| current["hooksAutoAccept"].as_bool().unwrap_or(false));
+
+    let root = ensure_yaml_object(config)?;
+    root.insert(
+        yaml_key("hooks_auto_accept"),
+        serde_yaml::Value::Bool(hooks_auto_accept),
+    );
+    if hooks.is_empty() {
+        root.remove(yaml_key("hooks"));
+    } else {
+        let yaml_value = serde_yaml::to_value(Value::Object(hooks))
+            .map_err(|err| format!("hooks 转换 YAML 失败: {err}"))?;
+        root.insert(yaml_key("hooks"), yaml_value);
+    }
+    Ok(())
+}
+
 fn is_hermes_mcp_server_name(value: &str) -> bool {
     let value = value.trim();
     !value.is_empty()
@@ -8264,6 +8413,30 @@ pub fn hermes_quick_commands_config_save(form: Value) -> Result<Value, String> {
         "configPath": config_path.to_string_lossy(),
         "backup": backup,
         "values": build_hermes_quick_commands_config_values(&config),
+    }))
+}
+
+#[tauri::command]
+pub fn hermes_hooks_config_read() -> Result<Value, String> {
+    let (config_path, exists, config) = read_hermes_channel_yaml_config()?;
+    ensure_yaml_object(&mut config.clone())?;
+    Ok(serde_json::json!({
+        "exists": exists,
+        "configPath": config_path.to_string_lossy(),
+        "values": build_hermes_hooks_config_values(&config),
+    }))
+}
+
+#[tauri::command]
+pub fn hermes_hooks_config_save(form: Value) -> Result<Value, String> {
+    let (config_path, _exists, mut config) = read_hermes_channel_yaml_config()?;
+    merge_hermes_hooks_config(&mut config, &form)?;
+    let backup = write_hermes_yaml_config(&config_path, &config)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "configPath": config_path.to_string_lossy(),
+        "backup": backup,
+        "values": build_hermes_hooks_config_values(&config),
     }))
 }
 
@@ -16030,6 +16203,179 @@ streaming:
         )
         .unwrap_err();
         assert!(err.contains("quick_commands.restart.target"));
+    }
+}
+
+#[cfg(test)]
+mod hermes_hooks_config_tests {
+    use super::{build_hermes_hooks_config_values, merge_hermes_hooks_config};
+    use serde_json::json;
+
+    #[test]
+    fn hooks_values_have_safe_defaults() {
+        let config = serde_yaml::Value::Mapping(Default::default());
+        let values = build_hermes_hooks_config_values(&config);
+
+        assert_eq!(values["hooksAutoAccept"], false);
+        assert_eq!(values["hooksJson"], "{}");
+    }
+
+    #[test]
+    fn hooks_values_read_yaml_mapping() {
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+hooks_auto_accept: true
+hooks:
+  pre_tool_call:
+    - matcher: terminal
+      command: ~/.hermes/agent-hooks/block-rm-rf.sh
+      timeout: 10
+  pre_llm_call:
+    - command: ~/.hermes/agent-hooks/inject-cwd-context.sh
+"#,
+        )
+        .unwrap();
+
+        let values = build_hermes_hooks_config_values(&config);
+        let hooks: serde_json::Value =
+            serde_json::from_str(values["hooksJson"].as_str().unwrap()).unwrap();
+
+        assert_eq!(values["hooksAutoAccept"], true);
+        assert_eq!(hooks["pre_tool_call"][0]["matcher"], "terminal");
+        assert_eq!(
+            hooks["pre_tool_call"][0]["command"],
+            "~/.hermes/agent-hooks/block-rm-rf.sh"
+        );
+        assert_eq!(hooks["pre_tool_call"][0]["timeout"], 10);
+        assert_eq!(
+            hooks["pre_llm_call"][0]["command"],
+            "~/.hermes/agent-hooks/inject-cwd-context.sh"
+        );
+    }
+
+    #[test]
+    fn merge_hooks_config_preserves_unknown_fields_and_unrelated_yaml() {
+        let mut config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+model:
+  provider: openrouter
+hooks:
+  pre_tool_call:
+    - matcher: terminal
+      command: old-hook.sh
+      extra_flag: keep-old
+memory:
+  memory_enabled: true
+"#,
+        )
+        .unwrap();
+
+        merge_hermes_hooks_config(
+            &mut config,
+            &json!({
+                "hooksAutoAccept": "true",
+                "hooksJson": serde_json::to_string(&json!({
+                    "pre_tool_call": [{
+                        "matcher": "terminal",
+                        "command": "~/.hermes/agent-hooks/block-rm-rf.sh",
+                        "timeout": 10,
+                        "extra_flag": "keep-hook"
+                    }],
+                    "post_tool_call": [{
+                        "matcher": "write_file|patch",
+                        "command": "~/.hermes/agent-hooks/auto-format.sh"
+                    }]
+                })).unwrap(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(config["model"]["provider"].as_str(), Some("openrouter"));
+        assert_eq!(config["memory"]["memory_enabled"].as_bool(), Some(true));
+        assert_eq!(config["hooks_auto_accept"].as_bool(), Some(true));
+        assert_eq!(
+            config["hooks"]["pre_tool_call"][0]["command"].as_str(),
+            Some("~/.hermes/agent-hooks/block-rm-rf.sh")
+        );
+        assert_eq!(
+            config["hooks"]["pre_tool_call"][0]["timeout"].as_i64(),
+            Some(10)
+        );
+        assert_eq!(
+            config["hooks"]["pre_tool_call"][0]["extra_flag"].as_str(),
+            Some("keep-hook")
+        );
+        assert_eq!(
+            config["hooks"]["post_tool_call"][0]["matcher"].as_str(),
+            Some("write_file|patch")
+        );
+    }
+
+    #[test]
+    fn merge_hooks_config_removes_empty_mapping_but_keeps_auto_accept() {
+        let mut config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+hooks_auto_accept: true
+hooks:
+  pre_tool_call:
+    - command: old-hook.sh
+streaming:
+  enabled: true
+"#,
+        )
+        .unwrap();
+
+        merge_hermes_hooks_config(
+            &mut config,
+            &json!({ "hooksAutoAccept": false, "hooksJson": "{}" }),
+        )
+        .unwrap();
+
+        assert!(config["hooks"].is_null());
+        assert_eq!(config["hooks_auto_accept"].as_bool(), Some(false));
+        assert_eq!(config["streaming"]["enabled"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn merge_hooks_config_rejects_invalid_values() {
+        let mut config = serde_yaml::Value::Mapping(Default::default());
+        let err = merge_hermes_hooks_config(&mut config, &json!({ "hooksJson": "[" })).unwrap_err();
+        assert!(err.contains("hooks JSON"));
+
+        let err = merge_hermes_hooks_config(
+            &mut config,
+            &json!({ "hooksJson": serde_json::to_string(&json!({ "bad_event": [{ "command": "hook.sh" }] })).unwrap() }),
+        )
+        .unwrap_err();
+        assert!(err.contains("hooks.bad_event"));
+
+        let err = merge_hermes_hooks_config(
+            &mut config,
+            &json!({ "hooksJson": serde_json::to_string(&json!({ "pre_tool_call": { "command": "hook.sh" } })).unwrap() }),
+        )
+        .unwrap_err();
+        assert!(err.contains("hooks.pre_tool_call"));
+
+        let err = merge_hermes_hooks_config(
+            &mut config,
+            &json!({ "hooksJson": serde_json::to_string(&json!({ "pre_tool_call": ["hook.sh"] })).unwrap() }),
+        )
+        .unwrap_err();
+        assert!(err.contains("hooks.pre_tool_call.0"));
+
+        let err = merge_hermes_hooks_config(
+            &mut config,
+            &json!({ "hooksJson": serde_json::to_string(&json!({ "pre_tool_call": [{ "command": "" }] })).unwrap() }),
+        )
+        .unwrap_err();
+        assert!(err.contains("hooks.pre_tool_call.0.command"));
+
+        let err = merge_hermes_hooks_config(
+            &mut config,
+            &json!({ "hooksJson": serde_json::to_string(&json!({ "pre_tool_call": [{ "command": "hook.sh", "timeout": 0 }] })).unwrap() }),
+        )
+        .unwrap_err();
+        assert!(err.contains("hooks.pre_tool_call.0.timeout"));
     }
 }
 
