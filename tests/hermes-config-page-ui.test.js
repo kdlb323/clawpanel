@@ -62,6 +62,8 @@ test('Hermes 配置页会暴露全局禁用工具集结构化配置字段', () =
   for (const id of [
     'hm-agent-toolsets-save',
     'hm-agent-disabled-toolsets',
+    'hm-platform-toolsets-save',
+    'hm-platform-toolsets-json',
   ]) {
     assert.match(source, new RegExp(`id="${id}"`), `缺少 ${id}`)
   }

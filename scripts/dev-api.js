@@ -3342,6 +3342,19 @@ const HERMES_DISPLAY_BACKGROUND_PROCESS_NOTIFICATIONS = new Set(['off', 'result'
 const HERMES_DISPLAY_FINAL_RESPONSE_MARKDOWN_VALUES = new Set(['render', 'strip', 'raw'])
 const HERMES_DISPLAY_LANGUAGE_VALUES = new Set(['en', 'zh', 'zh-hant', 'ja', 'de', 'es', 'fr', 'tr', 'uk', 'af', 'ko', 'it', 'ga', 'pt', 'ru', 'hu'])
 const HERMES_RUNTIME_FOOTER_FIELDS = new Set(['model', 'context_pct', 'cwd', 'duration', 'tokens', 'cost'])
+const HERMES_DEFAULT_PLATFORM_TOOLSETS = {
+  cli: ['hermes-cli'],
+  telegram: ['hermes-telegram'],
+  discord: ['hermes-discord'],
+  whatsapp: ['hermes-whatsapp'],
+  slack: ['hermes-slack'],
+  signal: ['hermes-signal'],
+  homeassistant: ['hermes-homeassistant'],
+  qqbot: ['hermes-qqbot'],
+  yuanbao: ['hermes-yuanbao'],
+  teams: ['hermes-teams'],
+  google_chat: ['hermes-google_chat'],
+}
 
 function parseHermesInteger(value, key, fallback, min, max, strict = false) {
   const raw = String(value ?? '').trim()
@@ -3820,6 +3833,40 @@ function normalizeHermesToolsetList(value, fieldName = 'agent.disabled_toolsets'
   return normalized
 }
 
+function validateHermesPlatformToolsets(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('platform_toolsets 必须是 JSON 对象')
+  }
+  const normalized = {}
+  for (const [rawPlatform, rawToolsets] of Object.entries(value)) {
+    const platform = String(rawPlatform || '').trim()
+    if (!platform || !/^[a-zA-Z0-9_.-]+$/.test(platform)) {
+      throw new Error(`platform_toolsets.${platform || '<empty>'} 平台名只能包含字母、数字、下划线、点和短横线`)
+    }
+    if (!Array.isArray(rawToolsets)) {
+      throw new Error(`platform_toolsets.${platform} 必须是工具集数组`)
+    }
+    const toolsets = normalizeHermesToolsetList(rawToolsets, `platform_toolsets.${platform}`)
+    if (!toolsets.length) {
+      throw new Error(`platform_toolsets.${platform} 至少需要一个工具集`)
+    }
+    normalized[platform] = toolsets
+  }
+  return normalized
+}
+
+function parseHermesPlatformToolsetsJson(raw) {
+  const text = String(raw ?? '').trim()
+  if (!text) return {}
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch (err) {
+    throw new Error(`platform_toolsets JSON 格式错误: ${err.message}`)
+  }
+  return validateHermesPlatformToolsets(value)
+}
+
 export function buildHermesSkillsConfigValues(config = {}) {
   const root = config && typeof config === 'object' && !Array.isArray(config) ? config : {}
   const skills = root.skills && typeof root.skills === 'object' && !Array.isArray(root.skills)
@@ -3869,6 +3916,24 @@ export function mergeHermesAgentToolsetsConfig(config = {}, form = {}) {
     : {}
   agent.disabled_toolsets = normalizeHermesToolsetList(Object.hasOwn(form, 'disabledToolsets') ? form.disabledToolsets : currentValues.disabledToolsets)
   next.agent = agent
+  return next
+}
+
+export function buildHermesPlatformToolsetsConfigValues(config = {}) {
+  const root = config && typeof config === 'object' && !Array.isArray(config) ? config : {}
+  const platformToolsets = root.platform_toolsets && typeof root.platform_toolsets === 'object' && !Array.isArray(root.platform_toolsets)
+    ? validateHermesPlatformToolsets(root.platform_toolsets)
+    : HERMES_DEFAULT_PLATFORM_TOOLSETS
+  return {
+    platformToolsetsJson: JSON.stringify(platformToolsets, null, 2),
+  }
+}
+
+export function mergeHermesPlatformToolsetsConfig(config = {}, form = {}) {
+  const next = mergeConfigsPreservingFields({}, config && typeof config === 'object' && !Array.isArray(config) ? config : {})
+  const currentValues = buildHermesPlatformToolsetsConfigValues(next)
+  const platformToolsets = parseHermesPlatformToolsetsJson(Object.hasOwn(form, 'platformToolsetsJson') ? form.platformToolsetsJson : currentValues.platformToolsetsJson)
+  next.platform_toolsets = platformToolsets
   return next
 }
 
@@ -10867,6 +10932,27 @@ const handlers = {
       configPath,
       backup,
       values: buildHermesAgentToolsetsConfigValues(next),
+    }
+  },
+
+  hermes_platform_toolsets_config_read() {
+    const { configPath, exists, config } = readHermesConfigYamlObject()
+    return {
+      exists,
+      configPath,
+      values: buildHermesPlatformToolsetsConfigValues(config),
+    }
+  },
+
+  hermes_platform_toolsets_config_save({ form } = {}) {
+    const { configPath, config } = readHermesConfigYamlObject()
+    const next = mergeHermesPlatformToolsetsConfig(config, form || {})
+    const backup = writeHermesConfigYamlObject(configPath, next)
+    return {
+      ok: true,
+      configPath,
+      backup,
+      values: buildHermesPlatformToolsetsConfigValues(next),
     }
   },
 

@@ -3922,6 +3922,101 @@ fn normalize_hermes_toolset_list(raw: Option<String>) -> Result<Vec<String>, Str
     Ok(normalized)
 }
 
+fn default_hermes_platform_toolsets() -> serde_json::Map<String, Value> {
+    let defaults = [
+        ("cli", "hermes-cli"),
+        ("telegram", "hermes-telegram"),
+        ("discord", "hermes-discord"),
+        ("whatsapp", "hermes-whatsapp"),
+        ("slack", "hermes-slack"),
+        ("signal", "hermes-signal"),
+        ("homeassistant", "hermes-homeassistant"),
+        ("qqbot", "hermes-qqbot"),
+        ("yuanbao", "hermes-yuanbao"),
+        ("teams", "hermes-teams"),
+        ("google_chat", "hermes-google_chat"),
+    ];
+    defaults
+        .into_iter()
+        .map(|(platform, toolset)| {
+            (
+                platform.to_string(),
+                Value::Array(vec![Value::String(toolset.to_string())]),
+            )
+        })
+        .collect()
+}
+
+fn normalize_hermes_toolset_values(value: &Value, field_name: &str) -> Result<Vec<String>, String> {
+    let Some(items) = value.as_array() else {
+        return Err(format!("{field_name} 必须是工具集数组"));
+    };
+    let mut normalized = Vec::new();
+    for item in items {
+        let Some(text) = item.as_str() else {
+            return Err(format!("{field_name} 只能包含字符串工具集"));
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if !text
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
+        {
+            return Err(format!(
+                "{field_name} 只能包含字母、数字、下划线、点和短横线"
+            ));
+        }
+        if !normalized.iter().any(|existing| existing == text) {
+            normalized.push(text.to_string());
+        }
+    }
+    if normalized.is_empty() {
+        return Err(format!("{field_name} 至少需要一个工具集"));
+    }
+    Ok(normalized)
+}
+
+fn validate_hermes_platform_toolsets(
+    value: &Value,
+) -> Result<serde_json::Map<String, Value>, String> {
+    let Some(map) = value.as_object() else {
+        return Err("platform_toolsets 必须是 JSON 对象".to_string());
+    };
+    let mut normalized = serde_json::Map::new();
+    for (platform, toolsets) in map {
+        if platform.is_empty()
+            || !platform
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
+        {
+            return Err(format!(
+                "platform_toolsets.{platform} 平台名只能包含字母、数字、下划线、点和短横线"
+            ));
+        }
+        let values =
+            normalize_hermes_toolset_values(toolsets, &format!("platform_toolsets.{platform}"))?;
+        normalized.insert(
+            platform.clone(),
+            Value::Array(values.into_iter().map(Value::String).collect()),
+        );
+    }
+    Ok(normalized)
+}
+
+fn parse_hermes_platform_toolsets_json(
+    raw: Option<String>,
+) -> Result<serde_json::Map<String, Value>, String> {
+    let text = raw.unwrap_or_default().trim().to_string();
+    if text.is_empty() {
+        return Ok(serde_json::Map::new());
+    }
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|err| format!("platform_toolsets JSON 格式错误: {err}"))?;
+    validate_hermes_platform_toolsets(&value)
+}
+
 fn build_hermes_agent_toolsets_config_values(config: &serde_yaml::Value) -> Value {
     let root = config.as_mapping();
     let disabled_toolsets = root
@@ -3932,6 +4027,39 @@ fn build_hermes_agent_toolsets_config_values(config: &serde_yaml::Value) -> Valu
     serde_json::json!({
         "disabledToolsets": disabled_toolsets,
     })
+}
+
+fn build_hermes_platform_toolsets_config_values(config: &serde_yaml::Value) -> Value {
+    let root = config.as_mapping();
+    let platform_toolsets = root
+        .and_then(|map| map.get(yaml_key("platform_toolsets")))
+        .and_then(|value| serde_json::to_value(value).ok())
+        .and_then(|value| validate_hermes_platform_toolsets(&value).ok())
+        .unwrap_or_else(default_hermes_platform_toolsets);
+
+    serde_json::json!({
+        "platformToolsetsJson": serde_json::to_string_pretty(&Value::Object(platform_toolsets)).unwrap_or_else(|_| "{}".to_string()),
+    })
+}
+
+fn merge_hermes_platform_toolsets_config(
+    config: &mut serde_yaml::Value,
+    form: &Value,
+) -> Result<(), String> {
+    let current = build_hermes_platform_toolsets_config_values(config);
+    let platform_toolsets = parse_hermes_platform_toolsets_json(
+        form_string(form, "platformToolsetsJson").or_else(|| {
+            current["platformToolsetsJson"]
+                .as_str()
+                .map(ToString::to_string)
+        }),
+    )?;
+    let yaml_value = serde_yaml::to_value(Value::Object(platform_toolsets))
+        .map_err(|err| format!("platform_toolsets 转换 YAML 失败: {err}"))?;
+
+    let root = ensure_yaml_object(config)?;
+    root.insert(yaml_key("platform_toolsets"), yaml_value);
+    Ok(())
 }
 
 fn merge_hermes_agent_toolsets_config(
@@ -7220,6 +7348,30 @@ pub fn hermes_agent_toolsets_config_save(form: Value) -> Result<Value, String> {
         "configPath": config_path.to_string_lossy(),
         "backup": backup,
         "values": build_hermes_agent_toolsets_config_values(&config),
+    }))
+}
+
+#[tauri::command]
+pub fn hermes_platform_toolsets_config_read() -> Result<Value, String> {
+    let (config_path, exists, config) = read_hermes_channel_yaml_config()?;
+    ensure_yaml_object(&mut config.clone())?;
+    Ok(serde_json::json!({
+        "exists": exists,
+        "configPath": config_path.to_string_lossy(),
+        "values": build_hermes_platform_toolsets_config_values(&config),
+    }))
+}
+
+#[tauri::command]
+pub fn hermes_platform_toolsets_config_save(form: Value) -> Result<Value, String> {
+    let (config_path, _exists, mut config) = read_hermes_channel_yaml_config()?;
+    merge_hermes_platform_toolsets_config(&mut config, &form)?;
+    let backup = write_hermes_yaml_config(&config_path, &config)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "configPath": config_path.to_string_lossy(),
+        "backup": backup,
+        "values": build_hermes_platform_toolsets_config_values(&config),
     }))
 }
 
@@ -14536,6 +14688,135 @@ agent:
         )
         .unwrap_err();
         assert!(err.contains("agent.disabled_toolsets"));
+    }
+}
+
+#[cfg(test)]
+mod hermes_platform_toolsets_config_tests {
+    use super::{
+        build_hermes_platform_toolsets_config_values, merge_hermes_platform_toolsets_config,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn platform_toolsets_values_have_upstream_defaults() {
+        let config: serde_yaml::Value = serde_yaml::from_str("{}").unwrap();
+        let values = build_hermes_platform_toolsets_config_values(&config);
+        let mapping: serde_json::Value =
+            serde_json::from_str(values["platformToolsetsJson"].as_str().unwrap()).unwrap();
+
+        assert_eq!(mapping["cli"][0].as_str(), Some("hermes-cli"));
+        assert_eq!(mapping["telegram"][0].as_str(), Some("hermes-telegram"));
+        assert_eq!(mapping["discord"][0].as_str(), Some("hermes-discord"));
+        assert_eq!(mapping["whatsapp"][0].as_str(), Some("hermes-whatsapp"));
+        assert_eq!(
+            mapping["google_chat"][0].as_str(),
+            Some("hermes-google_chat")
+        );
+    }
+
+    #[test]
+    fn platform_toolsets_values_read_yaml_mapping() {
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+platform_toolsets:
+  cli:
+    - web
+    - terminal
+    - file
+  telegram:
+    - hermes-telegram
+  custom_platform:
+    - safe
+"#,
+        )
+        .unwrap();
+        let values = build_hermes_platform_toolsets_config_values(&config);
+        let mapping: serde_json::Value =
+            serde_json::from_str(values["platformToolsetsJson"].as_str().unwrap()).unwrap();
+
+        assert_eq!(mapping["cli"][0].as_str(), Some("web"));
+        assert_eq!(mapping["cli"][1].as_str(), Some("terminal"));
+        assert_eq!(mapping["cli"][2].as_str(), Some("file"));
+        assert_eq!(mapping["telegram"][0].as_str(), Some("hermes-telegram"));
+        assert_eq!(mapping["custom_platform"][0].as_str(), Some("safe"));
+    }
+
+    #[test]
+    fn merge_platform_toolsets_config_preserves_unrelated_yaml() {
+        let mut config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+model:
+  provider: anthropic
+platform_toolsets:
+  cli:
+    - hermes-cli
+agent:
+  max_turns: 80
+"#,
+        )
+        .unwrap();
+
+        merge_hermes_platform_toolsets_config(
+            &mut config,
+            &json!({
+                "platformToolsetsJson": serde_json::to_string(&json!({
+                    "cli": ["web", "terminal", "file", "web"],
+                    "telegram": ["hermes-telegram"],
+                    "custom_platform": ["safe"]
+                })).unwrap()
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(config["model"]["provider"].as_str(), Some("anthropic"));
+        assert_eq!(config["agent"]["max_turns"].as_i64(), Some(80));
+        assert_eq!(config["platform_toolsets"]["cli"][0].as_str(), Some("web"));
+        assert_eq!(
+            config["platform_toolsets"]["cli"][1].as_str(),
+            Some("terminal")
+        );
+        assert_eq!(config["platform_toolsets"]["cli"][2].as_str(), Some("file"));
+        assert_eq!(
+            config["platform_toolsets"]["telegram"][0].as_str(),
+            Some("hermes-telegram")
+        );
+        assert_eq!(
+            config["platform_toolsets"]["custom_platform"][0].as_str(),
+            Some("safe")
+        );
+    }
+
+    #[test]
+    fn merge_platform_toolsets_config_rejects_invalid_values() {
+        let mut config = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+        let err = merge_hermes_platform_toolsets_config(
+            &mut config,
+            &json!({ "platformToolsetsJson": "[" }),
+        )
+        .unwrap_err();
+        assert!(err.contains("platform_toolsets JSON"));
+
+        let err = merge_hermes_platform_toolsets_config(
+            &mut config,
+            &json!({ "platformToolsetsJson": r#"{"bad platform":["web"]}"# }),
+        )
+        .unwrap_err();
+        assert!(err.contains("platform_toolsets.bad platform"));
+
+        let err = merge_hermes_platform_toolsets_config(
+            &mut config,
+            &json!({ "platformToolsetsJson": r#"{"cli":["bad tool"]}"# }),
+        )
+        .unwrap_err();
+        assert!(err.contains("platform_toolsets.cli"));
+
+        let err = merge_hermes_platform_toolsets_config(
+            &mut config,
+            &json!({ "platformToolsetsJson": r#"{"cli":[]}"# }),
+        )
+        .unwrap_err();
+        assert!(err.contains("platform_toolsets.cli"));
     }
 }
 
