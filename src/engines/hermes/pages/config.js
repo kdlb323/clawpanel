@@ -311,6 +311,7 @@ const TERMINAL_DEFAULTS = {
   terminalShellInitFiles: '',
   terminalAutoSourceBashrc: true,
   terminalPersistentShell: true,
+  terminalEnvPassthrough: '',
   terminalDockerMountCwdToWorkspace: false,
   terminalDockerRunAsHostUser: false,
   terminalDockerImage: '',
@@ -2309,6 +2310,10 @@ export function render() {
               <span class="hm-field-label">${t('engine.hermesTerminalConfigShellInitFiles')}</span>
               <textarea id="hm-terminal-shell-init-files" class="hm-input hm-textarea" rows="3" placeholder="~/.bashrc&#10;\${HOME}/.config/hermes/env.sh" ${disabled ? 'disabled' : ''}>${esc(terminalValues.terminalShellInitFiles)}</textarea>
             </label>
+            <label class="hm-field hm-field--wide">
+              <span class="hm-field-label">${t('engine.hermesTerminalConfigEnvPassthrough')}</span>
+              <textarea id="hm-terminal-env-passthrough" class="hm-input hm-textarea" rows="3" placeholder="OPENROUTER_API_KEY&#10;GITHUB_TOKEN" ${disabled ? 'disabled' : ''}>${esc(terminalValues.terminalEnvPassthrough)}</textarea>
+            </label>
           </div>
           <div class="hm-config-check-grid">
             <label class="hm-channel-check">
@@ -4268,6 +4273,7 @@ export function render() {
       terminalShellInitFiles: el.querySelector('#hm-terminal-shell-init-files')?.value || '',
       terminalAutoSourceBashrc: !!el.querySelector('#hm-terminal-auto-source-bashrc')?.checked,
       terminalPersistentShell: !!el.querySelector('#hm-terminal-persistent-shell')?.checked,
+      terminalEnvPassthrough: el.querySelector('#hm-terminal-env-passthrough')?.value || '',
       terminalDockerMountCwdToWorkspace: !!el.querySelector('#hm-terminal-docker-mount-cwd-to-workspace')?.checked,
       terminalDockerRunAsHostUser: !!el.querySelector('#hm-terminal-docker-run-as-host-user')?.checked,
       terminalDockerImage: el.querySelector('#hm-terminal-docker-image')?.value || '',

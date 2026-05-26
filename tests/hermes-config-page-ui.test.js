@@ -441,6 +441,7 @@ test('Hermes 配置页会暴露终端执行结构化配置字段', () => {
     'hm-terminal-shell-init-files',
     'hm-terminal-auto-source-bashrc',
     'hm-terminal-persistent-shell',
+    'hm-terminal-env-passthrough',
     'hm-terminal-docker-mount-cwd-to-workspace',
     'hm-terminal-docker-run-as-host-user',
     'hm-terminal-docker-image',

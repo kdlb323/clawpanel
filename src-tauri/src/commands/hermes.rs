@@ -8646,6 +8646,9 @@ fn build_hermes_terminal_config_values(config: &serde_yaml::Value) -> Value {
     let terminal_persistent_shell = terminal
         .and_then(|map| yaml_bool_field(map, "persistent_shell"))
         .unwrap_or(true);
+    let terminal_env_passthrough = terminal
+        .map(|map| yaml_string_sequence_field(map, "env_passthrough").join("\n"))
+        .unwrap_or_default();
     let terminal_docker_mount_cwd_to_workspace = terminal
         .and_then(|map| yaml_bool_field(map, "docker_mount_cwd_to_workspace"))
         .unwrap_or(false);
@@ -8686,6 +8689,7 @@ fn build_hermes_terminal_config_values(config: &serde_yaml::Value) -> Value {
         "terminalShellInitFiles": terminal_shell_init_files,
         "terminalAutoSourceBashrc": terminal_auto_source_bashrc,
         "terminalPersistentShell": terminal_persistent_shell,
+        "terminalEnvPassthrough": terminal_env_passthrough,
         "terminalDockerMountCwdToWorkspace": terminal_docker_mount_cwd_to_workspace,
         "terminalDockerRunAsHostUser": terminal_docker_run_as_host_user,
         "terminalDockerImage": terminal_docker_image,
@@ -8768,6 +8772,14 @@ fn merge_hermes_terminal_config(
         });
     let terminal_persistent_shell = form_bool(form, "terminalPersistentShell")
         .unwrap_or_else(|| current["terminalPersistentShell"].as_bool().unwrap_or(true));
+    let terminal_env_passthrough = normalize_hermes_env_name_list(
+        form_string(form, "terminalEnvPassthrough").or_else(|| {
+            current["terminalEnvPassthrough"]
+                .as_str()
+                .map(ToString::to_string)
+        }),
+        "terminal.env_passthrough",
+    )?;
     let terminal_docker_mount_cwd_to_workspace =
         form_bool(form, "terminalDockerMountCwdToWorkspace").unwrap_or_else(|| {
             current["terminalDockerMountCwdToWorkspace"]
@@ -8926,6 +8938,19 @@ fn merge_hermes_terminal_config(
         yaml_key("persistent_shell"),
         serde_yaml::Value::Bool(terminal_persistent_shell),
     );
+    if terminal_env_passthrough.is_empty() {
+        terminal.remove(yaml_key("env_passthrough"));
+    } else {
+        terminal.insert(
+            yaml_key("env_passthrough"),
+            serde_yaml::Value::Sequence(
+                terminal_env_passthrough
+                    .into_iter()
+                    .map(serde_yaml::Value::String)
+                    .collect(),
+            ),
+        );
+    }
     terminal.insert(
         yaml_key("docker_mount_cwd_to_workspace"),
         serde_yaml::Value::Bool(terminal_docker_mount_cwd_to_workspace),
@@ -17849,6 +17874,7 @@ mod hermes_terminal_config_tests {
         assert_eq!(values["terminalShellInitFiles"], "");
         assert_eq!(values["terminalAutoSourceBashrc"], true);
         assert_eq!(values["terminalPersistentShell"], true);
+        assert_eq!(values["terminalEnvPassthrough"], "");
         assert_eq!(values["terminalDockerMountCwdToWorkspace"], false);
         assert_eq!(values["terminalDockerRunAsHostUser"], false);
         assert_eq!(values["terminalContainerCpu"], 1);
@@ -17880,6 +17906,9 @@ terminal:
     - ${HOME}/.config/hermes/env.sh
   auto_source_bashrc: false
   persistent_shell: false
+  env_passthrough:
+    - OPENROUTER_API_KEY
+    - GITHUB_TOKEN
   docker_mount_cwd_to_workspace: true
   docker_run_as_host_user: true
   docker_image: nikolaik/python-nodejs:python3.11-nodejs20
@@ -17911,6 +17940,10 @@ terminal:
         );
         assert_eq!(values["terminalAutoSourceBashrc"], false);
         assert_eq!(values["terminalPersistentShell"], false);
+        assert_eq!(
+            values["terminalEnvPassthrough"],
+            "OPENROUTER_API_KEY\nGITHUB_TOKEN"
+        );
         assert_eq!(values["terminalDockerMountCwdToWorkspace"], true);
         assert_eq!(values["terminalDockerRunAsHostUser"], true);
         assert_eq!(
@@ -17947,6 +17980,8 @@ terminal:
   backend: local
   shell_init_files:
     - ~/.profile
+  env_passthrough:
+    - OLD_TOKEN
   docker_image: custom/python-node
   docker_forward_env:
     - OLD_TOKEN
@@ -17967,6 +18002,7 @@ streaming:
                 "terminalShellInitFiles": "~/.zshrc\n${HOME}/.config/hermes/env.sh\n~/.zshrc",
                 "terminalAutoSourceBashrc": false,
                 "terminalPersistentShell": false,
+                "terminalEnvPassthrough": "OPENROUTER_API_KEY\nGITHUB_TOKEN\nOPENROUTER_API_KEY",
                 "terminalDockerMountCwdToWorkspace": true,
                 "terminalDockerRunAsHostUser": true,
                 "terminalDockerImage": "nikolaik/python-nodejs:python3.12-nodejs22",
@@ -18014,6 +18050,21 @@ streaming:
         assert_eq!(
             config["terminal"]["persistent_shell"].as_bool(),
             Some(false)
+        );
+        assert_eq!(
+            config["terminal"]["env_passthrough"][0].as_str(),
+            Some("OPENROUTER_API_KEY")
+        );
+        assert_eq!(
+            config["terminal"]["env_passthrough"][1].as_str(),
+            Some("GITHUB_TOKEN")
+        );
+        assert_eq!(
+            config["terminal"]["env_passthrough"]
+                .as_sequence()
+                .unwrap()
+                .len(),
+            2
         );
         assert_eq!(
             config["terminal"]["docker_mount_cwd_to_workspace"].as_bool(),
@@ -18132,6 +18183,33 @@ terminal:
     }
 
     #[test]
+    fn merge_terminal_config_removes_empty_env_passthrough() {
+        let mut config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+terminal:
+  env_passthrough:
+    - OPENROUTER_API_KEY
+  custom_flag: keep-terminal
+"#,
+        )
+        .unwrap();
+
+        merge_hermes_terminal_config(
+            &mut config,
+            &json!({
+                "terminalEnvPassthrough": "  \n",
+            }),
+        )
+        .unwrap();
+
+        assert!(config["terminal"]["env_passthrough"].is_null());
+        assert_eq!(
+            config["terminal"]["custom_flag"].as_str(),
+            Some("keep-terminal")
+        );
+    }
+
+    #[test]
     fn merge_terminal_config_removes_empty_images() {
         let mut config: serde_yaml::Value = serde_yaml::from_str(
             r#"
@@ -18240,6 +18318,12 @@ terminal:
         )
         .unwrap_err();
         assert!(err.contains("terminal.shell_init_files"));
+        let err = merge_hermes_terminal_config(
+            &mut config,
+            &json!({ "terminalEnvPassthrough": "GOOD_TOKEN\nBAD TOKEN" }),
+        )
+        .unwrap_err();
+        assert!(err.contains("terminal.env_passthrough"));
     }
 }
 

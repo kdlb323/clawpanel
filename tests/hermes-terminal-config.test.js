@@ -17,6 +17,7 @@ test('Hermes 终端执行配置读取会提供上游默认值', () => {
     terminalShellInitFiles: '',
     terminalAutoSourceBashrc: true,
     terminalPersistentShell: true,
+    terminalEnvPassthrough: '',
     terminalDockerMountCwdToWorkspace: false,
     terminalDockerRunAsHostUser: false,
     terminalContainerCpu: 1,
@@ -45,6 +46,7 @@ test('Hermes 终端执行配置读取会回显 YAML 字段', () => {
       shell_init_files: ['~/.zshrc', '${HOME}/.config/hermes/env.sh'],
       auto_source_bashrc: false,
       persistent_shell: false,
+      env_passthrough: ['OPENROUTER_API_KEY', 'GITHUB_TOKEN'],
       docker_mount_cwd_to_workspace: true,
       docker_run_as_host_user: true,
       docker_image: 'nikolaik/python-nodejs:python3.11-nodejs20',
@@ -70,6 +72,7 @@ test('Hermes 终端执行配置读取会回显 YAML 字段', () => {
   assert.equal(values.terminalShellInitFiles, '~/.zshrc\n${HOME}/.config/hermes/env.sh')
   assert.equal(values.terminalAutoSourceBashrc, false)
   assert.equal(values.terminalPersistentShell, false)
+  assert.equal(values.terminalEnvPassthrough, 'OPENROUTER_API_KEY\nGITHUB_TOKEN')
   assert.equal(values.terminalDockerMountCwdToWorkspace, true)
   assert.equal(values.terminalDockerRunAsHostUser, true)
   assert.equal(values.terminalDockerImage, 'nikolaik/python-nodejs:python3.11-nodejs20')
@@ -93,6 +96,7 @@ test('Hermes 终端执行配置保存会保留未知字段并写入上游结构'
     terminal: {
       backend: 'local',
       shell_init_files: ['~/.profile'],
+      env_passthrough: ['OLD_TOKEN'],
       docker_image: 'custom/python-node',
       docker_forward_env: ['OLD_TOKEN'],
       custom_flag: 'keep-terminal',
@@ -106,6 +110,7 @@ test('Hermes 终端执行配置保存会保留未知字段并写入上游结构'
     terminalShellInitFiles: '~/.zshrc\n${HOME}/.config/hermes/env.sh\n~/.zshrc',
     terminalAutoSourceBashrc: false,
     terminalPersistentShell: false,
+    terminalEnvPassthrough: 'OPENROUTER_API_KEY\nGITHUB_TOKEN\nOPENROUTER_API_KEY',
     terminalDockerMountCwdToWorkspace: true,
     terminalDockerRunAsHostUser: true,
     terminalDockerImage: 'nikolaik/python-nodejs:python3.12-nodejs22',
@@ -132,6 +137,7 @@ test('Hermes 终端执行配置保存会保留未知字段并写入上游结构'
   assert.deepEqual(next.terminal.shell_init_files, ['~/.zshrc', '${HOME}/.config/hermes/env.sh'])
   assert.equal(next.terminal.auto_source_bashrc, false)
   assert.equal(next.terminal.persistent_shell, false)
+  assert.deepEqual(next.terminal.env_passthrough, ['OPENROUTER_API_KEY', 'GITHUB_TOKEN'])
   assert.equal(next.terminal.docker_mount_cwd_to_workspace, true)
   assert.equal(next.terminal.docker_run_as_host_user, true)
   assert.equal(next.terminal.docker_image, 'nikolaik/python-nodejs:python3.12-nodejs22')
@@ -175,6 +181,20 @@ test('Hermes 终端执行配置保存空 Shell 初始化文件会删除对应字
   })
 
   assert.equal(Object.hasOwn(next.terminal, 'shell_init_files'), false)
+  assert.equal(next.terminal.custom_flag, 'keep-terminal')
+})
+
+test('Hermes 终端执行配置保存空环境变量透传会删除对应字段', () => {
+  const next = mergeHermesTerminalConfig({
+    terminal: {
+      env_passthrough: ['OPENROUTER_API_KEY'],
+      custom_flag: 'keep-terminal',
+    },
+  }, {
+    terminalEnvPassthrough: '  \n',
+  })
+
+  assert.equal(Object.hasOwn(next.terminal, 'env_passthrough'), false)
   assert.equal(next.terminal.custom_flag, 'keep-terminal')
 })
 
@@ -260,5 +280,9 @@ test('Hermes 终端执行配置保存会拒绝非法后端和越界值', () => {
   assert.throws(
     () => mergeHermesTerminalConfig({}, { terminalShellInitFiles: 'valid.sh\nbad path.sh' }),
     /terminal\.shell_init_files/,
+  )
+  assert.throws(
+    () => mergeHermesTerminalConfig({}, { terminalEnvPassthrough: 'GOOD_TOKEN\nBAD TOKEN' }),
+    /terminal\.env_passthrough/,
   )
 })

@@ -5520,6 +5520,7 @@ export function buildHermesTerminalConfigValues(config = {}) {
     terminalShellInitFiles: normalizeHermesShellInitFileList(terminal.shell_init_files || [], 'terminal.shell_init_files').join('\n'),
     terminalAutoSourceBashrc: readHermesBool(terminal.auto_source_bashrc, true),
     terminalPersistentShell: readHermesBool(terminal.persistent_shell, true),
+    terminalEnvPassthrough: normalizeHermesEnvNameList(terminal.env_passthrough || [], 'terminal.env_passthrough').join('\n'),
     terminalDockerMountCwdToWorkspace: readHermesBool(terminal.docker_mount_cwd_to_workspace, false),
     terminalDockerRunAsHostUser: readHermesBool(terminal.docker_run_as_host_user, false),
     terminalDockerImage: typeof terminal.docker_image === 'string' ? terminal.docker_image.trim() : '',
@@ -5553,6 +5554,9 @@ export function mergeHermesTerminalConfig(config = {}, form = {}) {
   else delete terminal.shell_init_files
   terminal.auto_source_bashrc = formHermesBool(form, 'terminalAutoSourceBashrc', currentValues.terminalAutoSourceBashrc)
   terminal.persistent_shell = formHermesBool(form, 'terminalPersistentShell', currentValues.terminalPersistentShell)
+  const envPassthrough = normalizeHermesEnvNameList(Object.hasOwn(form, 'terminalEnvPassthrough') ? form.terminalEnvPassthrough : currentValues.terminalEnvPassthrough, 'terminal.env_passthrough')
+  if (envPassthrough.length) terminal.env_passthrough = envPassthrough
+  else delete terminal.env_passthrough
   terminal.docker_mount_cwd_to_workspace = formHermesBool(form, 'terminalDockerMountCwdToWorkspace', currentValues.terminalDockerMountCwdToWorkspace)
   terminal.docker_run_as_host_user = formHermesBool(form, 'terminalDockerRunAsHostUser', currentValues.terminalDockerRunAsHostUser)
   for (const [formKey, yamlKey] of [
