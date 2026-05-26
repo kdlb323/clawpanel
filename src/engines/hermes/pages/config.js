@@ -309,6 +309,10 @@ const BROWSER_DEFAULTS = {
   browserAllowPrivateUrls: false,
   browserAutoLocalForPrivateUrls: true,
   browserCdpUrl: '',
+  browserCamofoxManagedPersistence: false,
+  browserCamofoxUserId: '',
+  browserCamofoxSessionKey: '',
+  browserCamofoxAdoptExistingTab: false,
   browserDialogPolicy: 'must_respond',
   browserDialogTimeout: 300,
 }
@@ -2409,6 +2413,27 @@ export function render() {
             <label class="hm-channel-check">
               <input id="hm-browser-auto-local-for-private-urls" type="checkbox" ${browserValues.browserAutoLocalForPrivateUrls ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
               <span>${t('engine.hermesBrowserConfigAutoLocalForPrivateUrls')}</span>
+            </label>
+          </div>
+          <div class="hm-config-subtitle">${t('engine.hermesBrowserConfigCamofoxTitle')}</div>
+          <div class="hm-config-runtime-grid hm-config-browser-camofox-grid">
+            <label class="hm-field">
+              <span class="hm-field-label">${t('engine.hermesBrowserConfigCamofoxUserId')}</span>
+              <input id="hm-browser-camofox-user-id" class="hm-input" type="text" autocomplete="off" spellcheck="false" value="${esc(browserValues.browserCamofoxUserId)}" ${disabled ? 'disabled' : ''}>
+            </label>
+            <label class="hm-field">
+              <span class="hm-field-label">${t('engine.hermesBrowserConfigCamofoxSessionKey')}</span>
+              <input id="hm-browser-camofox-session-key" class="hm-input" type="text" autocomplete="off" spellcheck="false" value="${esc(browserValues.browserCamofoxSessionKey)}" ${disabled ? 'disabled' : ''}>
+            </label>
+          </div>
+          <div class="hm-config-check-grid">
+            <label class="hm-channel-check">
+              <input id="hm-browser-camofox-managed-persistence" type="checkbox" ${browserValues.browserCamofoxManagedPersistence ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+              <span>${t('engine.hermesBrowserConfigCamofoxManagedPersistence')}</span>
+            </label>
+            <label class="hm-channel-check">
+              <input id="hm-browser-camofox-adopt-existing-tab" type="checkbox" ${browserValues.browserCamofoxAdoptExistingTab ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+              <span>${t('engine.hermesBrowserConfigCamofoxAdoptExistingTab')}</span>
             </label>
           </div>
           <div class="hm-channel-footnote">${t('engine.hermesBrowserConfigFootnote')}</div>
@@ -4816,6 +4841,10 @@ export function render() {
       browserAllowPrivateUrls: !!el.querySelector('#hm-browser-allow-private-urls')?.checked,
       browserAutoLocalForPrivateUrls: !!el.querySelector('#hm-browser-auto-local-for-private-urls')?.checked,
       browserCdpUrl: el.querySelector('#hm-browser-cdp-url')?.value || '',
+      browserCamofoxManagedPersistence: !!el.querySelector('#hm-browser-camofox-managed-persistence')?.checked,
+      browserCamofoxUserId: el.querySelector('#hm-browser-camofox-user-id')?.value || '',
+      browserCamofoxSessionKey: el.querySelector('#hm-browser-camofox-session-key')?.value || '',
+      browserCamofoxAdoptExistingTab: !!el.querySelector('#hm-browser-camofox-adopt-existing-tab')?.checked,
       browserDialogPolicy: el.querySelector('#hm-browser-dialog-policy')?.value || 'must_respond',
       browserDialogTimeout: el.querySelector('#hm-browser-dialog-timeout')?.value || '300',
     }

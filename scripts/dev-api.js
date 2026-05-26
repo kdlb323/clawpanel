@@ -4770,6 +4770,17 @@ function normalizeHermesOptionalString(value, key) {
   return value.trim()
 }
 
+function normalizeHermesCamofoxIdentity(value, key) {
+  if (value == null || value === '') return ''
+  if (typeof value !== 'string') throw new Error(`${key} 必须是字符串`)
+  const text = value.trim()
+  if (!text) return ''
+  if (!/^[A-Za-z0-9_.:@+-]+$/.test(text)) {
+    throw new Error(`${key} 只能包含字母、数字、下划线、点、冒号、@、加号和短横线`)
+  }
+  return text
+}
+
 export function buildHermesModelConfigValues(config = {}) {
   const root = config && typeof config === 'object' && !Array.isArray(config) ? config : {}
   const model = root.model && typeof root.model === 'object' && !Array.isArray(root.model) ? root.model : {}
@@ -5639,6 +5650,9 @@ export function buildHermesBrowserConfigValues(config = {}) {
   const browser = root.browser && typeof root.browser === 'object' && !Array.isArray(root.browser)
     ? root.browser
     : {}
+  const camofox = browser.camofox && typeof browser.camofox === 'object' && !Array.isArray(browser.camofox)
+    ? browser.camofox
+    : {}
   return {
     browserInactivityTimeout: parseHermesInteger(browser.inactivity_timeout, 'browser.inactivity_timeout', 120, 1, 86400, false),
     browserCommandTimeout: parseHermesInteger(browser.command_timeout, 'browser.command_timeout', 30, 5, 3600, false),
@@ -5647,6 +5661,10 @@ export function buildHermesBrowserConfigValues(config = {}) {
     browserAllowPrivateUrls: readHermesBool(browser.allow_private_urls, false),
     browserAutoLocalForPrivateUrls: readHermesBool(browser.auto_local_for_private_urls, true),
     browserCdpUrl: normalizeHermesOptionalString(browser.cdp_url, 'browser.cdp_url'),
+    browserCamofoxManagedPersistence: readHermesBool(camofox.managed_persistence, false),
+    browserCamofoxUserId: normalizeHermesCamofoxIdentity(camofox.user_id, 'browser.camofox.user_id'),
+    browserCamofoxSessionKey: normalizeHermesCamofoxIdentity(camofox.session_key, 'browser.camofox.session_key'),
+    browserCamofoxAdoptExistingTab: readHermesBool(camofox.adopt_existing_tab, false),
     browserDialogPolicy: normalizeHermesBrowserDialogPolicy(browser.dialog_policy, false),
     browserDialogTimeout: parseHermesInteger(browser.dialog_timeout_s, 'browser.dialog_timeout_s', 300, 1, 86400, false),
   }
@@ -5667,6 +5685,18 @@ export function mergeHermesBrowserConfig(config = {}, form = {}) {
   const cdpUrl = normalizeHermesOptionalString(Object.hasOwn(form, 'browserCdpUrl') ? form.browserCdpUrl : currentValues.browserCdpUrl, 'browser.cdp_url')
   if (cdpUrl) browser.cdp_url = cdpUrl
   else delete browser.cdp_url
+  const camofox = browser.camofox && typeof browser.camofox === 'object' && !Array.isArray(browser.camofox)
+    ? mergeConfigsPreservingFields(browser.camofox, {})
+    : {}
+  camofox.managed_persistence = formHermesBool(form, 'browserCamofoxManagedPersistence', currentValues.browserCamofoxManagedPersistence)
+  const camofoxUserId = normalizeHermesCamofoxIdentity(Object.hasOwn(form, 'browserCamofoxUserId') ? form.browserCamofoxUserId : currentValues.browserCamofoxUserId, 'browser.camofox.user_id')
+  if (camofoxUserId) camofox.user_id = camofoxUserId
+  else delete camofox.user_id
+  const camofoxSessionKey = normalizeHermesCamofoxIdentity(Object.hasOwn(form, 'browserCamofoxSessionKey') ? form.browserCamofoxSessionKey : currentValues.browserCamofoxSessionKey, 'browser.camofox.session_key')
+  if (camofoxSessionKey) camofox.session_key = camofoxSessionKey
+  else delete camofox.session_key
+  camofox.adopt_existing_tab = formHermesBool(form, 'browserCamofoxAdoptExistingTab', currentValues.browserCamofoxAdoptExistingTab)
+  browser.camofox = camofox
   browser.dialog_policy = normalizeHermesBrowserDialogPolicy(Object.hasOwn(form, 'browserDialogPolicy') ? form.browserDialogPolicy : currentValues.browserDialogPolicy, true)
   browser.dialog_timeout_s = parseHermesInteger(Object.hasOwn(form, 'browserDialogTimeout') ? form.browserDialogTimeout : currentValues.browserDialogTimeout, 'browser.dialog_timeout_s', 300, 1, 86400, true)
   next.browser = browser

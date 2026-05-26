@@ -458,6 +458,10 @@ test('Hermes 配置页会暴露浏览器基础结构化配置字段', () => {
     'hm-browser-allow-private-urls',
     'hm-browser-auto-local-for-private-urls',
     'hm-browser-cdp-url',
+    'hm-browser-camofox-managed-persistence',
+    'hm-browser-camofox-user-id',
+    'hm-browser-camofox-session-key',
+    'hm-browser-camofox-adopt-existing-tab',
     'hm-browser-dialog-policy',
     'hm-browser-dialog-timeout',
   ]) {

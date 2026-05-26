@@ -2603,6 +2603,23 @@ fn set_optional_yaml_string(map: &mut serde_yaml::Mapping, key: &str, value: Str
     }
 }
 
+fn normalize_hermes_camofox_identity(value: Option<String>, key: &str) -> Result<String, String> {
+    let text = value.unwrap_or_default().trim().to_string();
+    if text.is_empty() {
+        return Ok(String::new());
+    }
+    if text
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | ':' | '@' | '+' | '-'))
+    {
+        Ok(text)
+    } else {
+        Err(format!(
+            "{key} 只能包含字母、数字、下划线、点、冒号、@、加号和短横线"
+        ))
+    }
+}
+
 fn yaml_string_sequence_field(map: &serde_yaml::Mapping, key: &str) -> Vec<String> {
     yaml_get(map, key)
         .and_then(|value| value.as_sequence())
@@ -8583,6 +8600,23 @@ fn build_hermes_browser_config_values(config: &serde_yaml::Value) -> Value {
     let browser_cdp_url = browser
         .and_then(|map| yaml_string_field(map, "cdp_url"))
         .unwrap_or_default();
+    let camofox = browser.and_then(|map| yaml_get_mapping(map, "camofox"));
+    let browser_camofox_managed_persistence = camofox
+        .and_then(|map| yaml_bool_field(map, "managed_persistence"))
+        .unwrap_or(false);
+    let browser_camofox_user_id = normalize_hermes_camofox_identity(
+        camofox.and_then(|map| yaml_string_field(map, "user_id")),
+        "browser.camofox.user_id",
+    )
+    .unwrap_or_default();
+    let browser_camofox_session_key = normalize_hermes_camofox_identity(
+        camofox.and_then(|map| yaml_string_field(map, "session_key")),
+        "browser.camofox.session_key",
+    )
+    .unwrap_or_default();
+    let browser_camofox_adopt_existing_tab = camofox
+        .and_then(|map| yaml_bool_field(map, "adopt_existing_tab"))
+        .unwrap_or(false);
     let browser_dialog_policy = normalize_hermes_browser_dialog_policy(
         browser.and_then(|map| yaml_string_field(map, "dialog_policy")),
         false,
@@ -8600,6 +8634,10 @@ fn build_hermes_browser_config_values(config: &serde_yaml::Value) -> Value {
         "browserAllowPrivateUrls": browser_allow_private_urls,
         "browserAutoLocalForPrivateUrls": browser_auto_local_for_private_urls,
         "browserCdpUrl": browser_cdp_url,
+        "browserCamofoxManagedPersistence": browser_camofox_managed_persistence,
+        "browserCamofoxUserId": browser_camofox_user_id,
+        "browserCamofoxSessionKey": browser_camofox_session_key,
+        "browserCamofoxAdoptExistingTab": browser_camofox_adopt_existing_tab,
         "browserDialogPolicy": browser_dialog_policy,
         "browserDialogTimeout": browser_dialog_timeout,
     })
@@ -8663,6 +8701,44 @@ fn merge_hermes_browser_config(config: &mut serde_yaml::Value, form: &Value) -> 
             .trim()
             .to_string()
     };
+    let browser_camofox_managed_persistence = form_bool(form, "browserCamofoxManagedPersistence")
+        .unwrap_or_else(|| {
+            current["browserCamofoxManagedPersistence"]
+                .as_bool()
+                .unwrap_or(false)
+        });
+    let browser_camofox_user_id = normalize_hermes_camofox_identity(
+        if form.get("browserCamofoxUserId").is_some() {
+            Some(
+                form_string(form, "browserCamofoxUserId")
+                    .ok_or_else(|| "browser.camofox.user_id 必须是字符串".to_string())?,
+            )
+        } else {
+            current["browserCamofoxUserId"]
+                .as_str()
+                .map(ToString::to_string)
+        },
+        "browser.camofox.user_id",
+    )?;
+    let browser_camofox_session_key = normalize_hermes_camofox_identity(
+        if form.get("browserCamofoxSessionKey").is_some() {
+            Some(
+                form_string(form, "browserCamofoxSessionKey")
+                    .ok_or_else(|| "browser.camofox.session_key 必须是字符串".to_string())?,
+            )
+        } else {
+            current["browserCamofoxSessionKey"]
+                .as_str()
+                .map(ToString::to_string)
+        },
+        "browser.camofox.session_key",
+    )?;
+    let browser_camofox_adopt_existing_tab = form_bool(form, "browserCamofoxAdoptExistingTab")
+        .unwrap_or_else(|| {
+            current["browserCamofoxAdoptExistingTab"]
+                .as_bool()
+                .unwrap_or(false)
+        });
     let browser_dialog_policy = normalize_hermes_browser_dialog_policy(
         if form.get("browserDialogPolicy").is_some() {
             form_string(form, "browserDialogPolicy")
@@ -8712,6 +8788,17 @@ fn merge_hermes_browser_config(config: &mut serde_yaml::Value, form: &Value) -> 
         serde_yaml::Value::Bool(browser_auto_local_for_private_urls),
     );
     set_optional_yaml_string(browser, "cdp_url", browser_cdp_url);
+    let camofox = yaml_child_object(browser, "camofox")?;
+    camofox.insert(
+        yaml_key("managed_persistence"),
+        serde_yaml::Value::Bool(browser_camofox_managed_persistence),
+    );
+    set_optional_yaml_string(camofox, "user_id", browser_camofox_user_id);
+    set_optional_yaml_string(camofox, "session_key", browser_camofox_session_key);
+    camofox.insert(
+        yaml_key("adopt_existing_tab"),
+        serde_yaml::Value::Bool(browser_camofox_adopt_existing_tab),
+    );
     browser.insert(
         yaml_key("dialog_policy"),
         serde_yaml::Value::String(browser_dialog_policy),
@@ -18257,6 +18344,10 @@ mod hermes_browser_config_tests {
         assert_eq!(values["browserAllowPrivateUrls"], false);
         assert_eq!(values["browserAutoLocalForPrivateUrls"], true);
         assert_eq!(values["browserCdpUrl"], "");
+        assert_eq!(values["browserCamofoxManagedPersistence"], false);
+        assert_eq!(values["browserCamofoxUserId"], "");
+        assert_eq!(values["browserCamofoxSessionKey"], "");
+        assert_eq!(values["browserCamofoxAdoptExistingTab"], false);
         assert_eq!(values["browserDialogPolicy"], "must_respond");
         assert_eq!(values["browserDialogTimeout"], 300);
     }
@@ -18273,6 +18364,11 @@ browser:
   allow_private_urls: true
   auto_local_for_private_urls: false
   cdp_url: ws://127.0.0.1:9222/devtools/browser/demo
+  camofox:
+    managed_persistence: true
+    user_id: shared-camofox-user
+    session_key: shared-session-key
+    adopt_existing_tab: true
   dialog_policy: auto_accept
   dialog_timeout_s: 120
 "#,
@@ -18289,6 +18385,10 @@ browser:
             values["browserCdpUrl"],
             "ws://127.0.0.1:9222/devtools/browser/demo"
         );
+        assert_eq!(values["browserCamofoxManagedPersistence"], true);
+        assert_eq!(values["browserCamofoxUserId"], "shared-camofox-user");
+        assert_eq!(values["browserCamofoxSessionKey"], "shared-session-key");
+        assert_eq!(values["browserCamofoxAdoptExistingTab"], true);
         assert_eq!(values["browserDialogPolicy"], "auto_accept");
         assert_eq!(values["browserDialogTimeout"], 120);
     }
@@ -18306,7 +18406,11 @@ browser:
   engine: auto
   cdp_url: ws://127.0.0.1:9222/devtools/browser/demo
   camofox:
-    managed_persistence: true
+    managed_persistence: false
+    user_id: old-user
+    session_key: old-session
+    adopt_existing_tab: false
+    custom_flag: keep-camofox
   custom_flag: keep-browser
 streaming:
   enabled: true
@@ -18324,6 +18428,10 @@ streaming:
                 "browserAllowPrivateUrls": true,
                 "browserAutoLocalForPrivateUrls": false,
                 "browserCdpUrl": "http://127.0.0.1:9222",
+                "browserCamofoxManagedPersistence": true,
+                "browserCamofoxUserId": "shared-camofox-user",
+                "browserCamofoxSessionKey": "shared-session-key",
+                "browserCamofoxAdoptExistingTab": true,
                 "browserDialogPolicy": "auto_dismiss",
                 "browserDialogTimeout": "45",
             }),
@@ -18356,6 +18464,69 @@ streaming:
         assert_eq!(
             config["browser"]["camofox"]["managed_persistence"].as_bool(),
             Some(true)
+        );
+        assert_eq!(
+            config["browser"]["camofox"]["user_id"].as_str(),
+            Some("shared-camofox-user")
+        );
+        assert_eq!(
+            config["browser"]["camofox"]["session_key"].as_str(),
+            Some("shared-session-key")
+        );
+        assert_eq!(
+            config["browser"]["camofox"]["adopt_existing_tab"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            config["browser"]["camofox"]["custom_flag"].as_str(),
+            Some("keep-camofox")
+        );
+        assert_eq!(
+            config["browser"]["custom_flag"].as_str(),
+            Some("keep-browser")
+        );
+    }
+
+    #[test]
+    fn merge_browser_config_removes_empty_camofox_identity_fields() {
+        let mut config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+browser:
+  camofox:
+    managed_persistence: true
+    user_id: old-user
+    session_key: old-session
+    adopt_existing_tab: true
+    custom_flag: keep-camofox
+  custom_flag: keep-browser
+"#,
+        )
+        .unwrap();
+
+        merge_hermes_browser_config(
+            &mut config,
+            &json!({
+                "browserCamofoxManagedPersistence": false,
+                "browserCamofoxUserId": "  ",
+                "browserCamofoxSessionKey": "",
+                "browserCamofoxAdoptExistingTab": false,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            config["browser"]["camofox"]["managed_persistence"].as_bool(),
+            Some(false)
+        );
+        assert!(config["browser"]["camofox"]["user_id"].is_null());
+        assert!(config["browser"]["camofox"]["session_key"].is_null());
+        assert_eq!(
+            config["browser"]["camofox"]["adopt_existing_tab"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            config["browser"]["camofox"]["custom_flag"].as_str(),
+            Some("keep-camofox")
         );
         assert_eq!(
             config["browser"]["custom_flag"].as_str(),
@@ -18406,6 +18577,21 @@ browser:
         let err =
             merge_hermes_browser_config(&mut config, &json!({ "browserCdpUrl": 123 })).unwrap_err();
         assert!(err.contains("browser.cdp_url"));
+        let err = merge_hermes_browser_config(&mut config, &json!({ "browserCamofoxUserId": 123 }))
+            .unwrap_err();
+        assert!(err.contains("browser.camofox.user_id"));
+        let err = merge_hermes_browser_config(
+            &mut config,
+            &json!({ "browserCamofoxUserId": "bad user" }),
+        )
+        .unwrap_err();
+        assert!(err.contains("browser.camofox.user_id"));
+        let err = merge_hermes_browser_config(
+            &mut config,
+            &json!({ "browserCamofoxSessionKey": "bad session" }),
+        )
+        .unwrap_err();
+        assert!(err.contains("browser.camofox.session_key"));
     }
 }
 
