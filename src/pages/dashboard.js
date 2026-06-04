@@ -292,6 +292,7 @@ async function _loadDashboardDataInner(page, fullRefresh, loadSeq) {
           patched = true
         }
         if (patched) {
+          if (loadSeq !== _dashboardLoadSeq || !page.isConnected) return
           config = freshConfig
           api.writeOpenclawConfig(freshConfig).catch(() => {})
         }
