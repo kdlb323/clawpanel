@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import {
   buildOpenclawPathConflictRecords,
+  resolveOpenclawCliInput,
   quarantineOpenclawPathForWeb,
   readJsonFileRelaxed,
 } from '../scripts/dev-api.js'
@@ -89,6 +90,25 @@ test('Web API CLI 隔离拒绝非 openclaw 文件', () => {
 
     assert.throws(() => quarantineOpenclawPathForWeb(filePath), /拒绝隔离非 openclaw 文件/)
     assert.equal(fs.existsSync(filePath), true)
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('Web API Windows CLI 解析不会绑定无扩展名 openclaw shim', (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('Windows only')
+    return
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'clawpanel-cli-shim-'))
+  try {
+    const bare = path.join(tmp, 'openclaw')
+    fs.writeFileSync(bare, '#!/bin/sh\n')
+    assert.equal(resolveOpenclawCliInput(bare), null)
+
+    const cmd = path.join(tmp, 'openclaw.cmd')
+    fs.writeFileSync(cmd, '@echo off\r\n')
+    assert.equal(resolveOpenclawCliInput(bare), cmd)
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }

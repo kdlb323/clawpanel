@@ -1449,10 +1449,17 @@ mod platform {
         // standalone 安装目录（集中管理，避免多处硬编码）
         for sa_dir in crate::commands::config::all_standalone_dirs() {
             candidates.push(sa_dir.join("openclaw.cmd"));
+            candidates.push(sa_dir.join("openclaw.exe"));
+            candidates.push(sa_dir.join("openclaw.bat"));
+            candidates.push(sa_dir.join("openclaw.js"));
         }
 
         if let Ok(appdata) = env::var("APPDATA") {
-            candidates.push(Path::new(&appdata).join("npm").join("openclaw.cmd"));
+            let npm_dir = Path::new(&appdata).join("npm");
+            candidates.push(npm_dir.join("openclaw.cmd"));
+            candidates.push(npm_dir.join("openclaw.exe"));
+            candidates.push(npm_dir.join("openclaw.bat"));
+            candidates.push(npm_dir.join("openclaw.js"));
         }
         if let Ok(localappdata) = env::var("LOCALAPPDATA") {
             candidates.push(
@@ -1474,7 +1481,9 @@ mod platform {
             }
             let base = Path::new(dir);
             candidates.push(base.join("openclaw.cmd"));
-            candidates.push(base.join("openclaw"));
+            candidates.push(base.join("openclaw.exe"));
+            candidates.push(base.join("openclaw.bat"));
+            candidates.push(base.join("openclaw.js"));
             candidates.push(
                 base.join("node_modules")
                     .join("@qingchencloud")
@@ -1496,7 +1505,7 @@ mod platform {
 
         // 方式1: 检查常见文件路径（零进程，最快）
         for path in candidate_cli_paths() {
-            if path.exists() {
+            if crate::utils::canonicalize_windows_openclaw_cli_path(&path).is_some() {
                 return true;
             }
         }
@@ -1511,12 +1520,12 @@ mod platform {
             if o.status.success() {
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 for line in stdout.lines() {
-                    let p = line.trim().to_lowercase();
-                    // 跳过已知第三方 openclaw 路径
-                    if p.contains(".cherrystudio") || p.contains("cherry-studio") {
+                    let p = line.trim();
+                    if p.is_empty() {
                         continue;
                     }
-                    if !p.is_empty() {
+                    if crate::utils::canonicalize_windows_openclaw_cli_path(Path::new(p)).is_some()
+                    {
                         return true;
                     }
                 }

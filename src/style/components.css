@@ -99,6 +99,53 @@
   margin-top: 4px;
 }
 
+.panel-update-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.panel-update-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.panel-update-warning {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.panel-update-new {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.panel-update-installer {
+  max-width: 100%;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.panel-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.panel-update-actions .btn {
+  padding: 2px 8px;
+  font-size: var(--font-size-xs);
+}
+
 /* 状态点 */
 .status-dot {
   width: 8px;
@@ -871,12 +918,42 @@ mark {
 }
 #login-overlay.hide { opacity: 0; pointer-events: none; }
 .login-card {
-  width: 360px; max-width: 90vw; padding: 40px 32px;
+  position: relative;
+  width: 360px; max-width: 90vw; padding: 54px 32px 40px;
   background: var(--bg-card, #fff);
   border: 1px solid var(--border, #e4e4e7);
   border-radius: 16px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.08);
   text-align: center;
+}
+.login-lang-switch {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 4px 8px 4px 10px;
+  border: 1px solid var(--border-primary, #e4e4e7);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-secondary, #f4f4f5) 86%, transparent);
+  color: var(--text-tertiary, #a1a1aa);
+  font-size: 11px;
+  font-weight: 650;
+}
+.login-lang-switch select {
+  max-width: 150px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-secondary, #52525b);
+  font: inherit;
+  cursor: pointer;
+}
+.login-lang-switch:focus-within {
+  border-color: var(--primary, #6366f1);
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
 }
 .login-card .login-logo {
   width: 48px; height: 48px; margin: 0 auto 16px;

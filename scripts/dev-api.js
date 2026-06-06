@@ -265,6 +265,7 @@ const PANEL_VERSION = (() => {
     return '0.0.0'
   }
 })()
+const SITE_BASE_URL = 'https://claw.qt.cool'
 const VERSION_POLICY_PATH = path.join(__dev_dirname, '..', 'openclaw-version-policy.json')
 function normalizeCustomOpenclawDir(raw) {
   if (typeof raw !== 'string') return null
@@ -321,13 +322,37 @@ function scanCliIdentity(rawPath) {
   return canonicalCliPath(identityPath) || identityPath
 }
 
+function isWindowsLaunchableOpenclawPath(rawPath) {
+  if (!isWindows) return true
+  const normalized = normalizeCliPath(rawPath)
+  if (!normalized) return false
+  const base = path.basename(normalized).toLowerCase()
+  return ['openclaw.cmd', 'openclaw.exe', 'openclaw.bat', 'openclaw.js'].includes(base)
+}
+
+export function canonicalWindowsOpenclawCliPath(rawPath) {
+  const normalized = normalizeCliPath(rawPath)
+  if (!normalized || !isWindows) return normalized
+  const base = path.basename(normalized).toLowerCase()
+  if (['openclaw', 'openclaw.exe', 'openclaw.ps1'].includes(base)) {
+    for (const name of ['openclaw.cmd', 'openclaw.exe', 'openclaw.bat', 'openclaw.js']) {
+      const candidate = path.join(path.dirname(normalized), name)
+      if (fs.existsSync(candidate) && !isRejectedCliPath(candidate)) return candidate
+    }
+  }
+  if (fs.existsSync(normalized) && isWindowsLaunchableOpenclawPath(normalized) && !isRejectedCliPath(normalized)) {
+    return normalized
+  }
+  return null
+}
+
 function isRejectedCliPath(cliPath) {
   const lower = String(cliPath || '').replace(/\\/g, '/').toLowerCase()
   return lower.includes('/.cherrystudio/') || lower.includes('cherry-studio')
 }
 
 function addCliCandidate(candidates, seen, rawPath) {
-  const normalized = normalizeCliPath(rawPath)
+  const normalized = isWindows ? canonicalWindowsOpenclawCliPath(rawPath) : normalizeCliPath(rawPath)
   if (!normalized || !fs.existsSync(normalized) || isRejectedCliPath(normalized)) return
   const identity = scanCliIdentity(normalized) || normalized
   const key = isWindows ? identity.toLowerCase() : identity
@@ -547,13 +572,16 @@ function addCommonOpenclawCandidates(candidates, seen) {
     const standaloneDir = standaloneInstallDir()
     if (appdata) {
       addCliCandidate(candidates, seen, path.join(appdata, 'npm', 'openclaw.cmd'))
-      addCliCandidate(candidates, seen, path.join(appdata, 'npm', 'openclaw'))
+      addCliCandidate(candidates, seen, path.join(appdata, 'npm', 'openclaw.exe'))
+      addCliCandidate(candidates, seen, path.join(appdata, 'npm', 'openclaw.bat'))
+      addCliCandidate(candidates, seen, path.join(appdata, 'npm', 'openclaw.js'))
     }
     const customPrefix = readWindowsNpmGlobalPrefix()
     if (customPrefix) {
       addCliCandidate(candidates, seen, path.join(customPrefix, 'openclaw.cmd'))
       addCliCandidate(candidates, seen, path.join(customPrefix, 'openclaw.exe'))
-      addCliCandidate(candidates, seen, path.join(customPrefix, 'openclaw'))
+      addCliCandidate(candidates, seen, path.join(customPrefix, 'openclaw.bat'))
+      addCliCandidate(candidates, seen, path.join(customPrefix, 'openclaw.js'))
     }
     if (localappdata) {
       addCliCandidate(candidates, seen, path.join(localappdata, 'Programs', 'OpenClaw', 'openclaw.cmd'))
@@ -604,7 +632,8 @@ function collectPreferredCliCandidates() {
     if (isWindows) {
       addCliCandidate(candidates, seen, path.join(trimmed, 'openclaw.cmd'))
       addCliCandidate(candidates, seen, path.join(trimmed, 'openclaw.exe'))
-      addCliCandidate(candidates, seen, path.join(trimmed, 'openclaw'))
+      addCliCandidate(candidates, seen, path.join(trimmed, 'openclaw.bat'))
+      addCliCandidate(candidates, seen, path.join(trimmed, 'openclaw.js'))
     } else {
       addCliCandidate(candidates, seen, path.join(trimmed, 'openclaw'))
     }
@@ -624,7 +653,7 @@ function collectAllCliCandidates() {
 }
 
 function readBoundOpenclawCliPath() {
-  const normalized = normalizeCliPath(readPanelConfig()?.openclawCliPath || '')
+  const normalized = resolveOpenclawCliInput(readPanelConfig()?.openclawCliPath || '')
   if (!normalized || !fs.existsSync(normalized) || isRejectedCliPath(normalized)) return null
   return normalized
 }
@@ -740,12 +769,12 @@ export function quarantineOpenclawPathForWeb(rawPath, options = {}) {
   }
 }
 
-function resolveOpenclawCliInput(rawPath) {
+export function resolveOpenclawCliInput(rawPath) {
   const normalized = normalizeCliPath(rawPath)
   if (!normalized) return null
   if (fs.existsSync(normalized) && fs.statSync(normalized).isDirectory()) {
     const candidates = isWindows
-      ? [path.join(normalized, 'openclaw.cmd'), path.join(normalized, 'openclaw.exe'), path.join(normalized, 'openclaw')]
+      ? [path.join(normalized, 'openclaw.cmd'), path.join(normalized, 'openclaw.exe'), path.join(normalized, 'openclaw.bat'), path.join(normalized, 'openclaw.js')]
       : [path.join(normalized, 'openclaw')]
     for (const candidate of candidates) {
       const resolved = normalizeCliPath(candidate)
@@ -753,6 +782,7 @@ function resolveOpenclawCliInput(rawPath) {
     }
     return null
   }
+  if (isWindows) return canonicalWindowsOpenclawCliPath(normalized)
   if (!fs.existsSync(normalized) || isRejectedCliPath(normalized)) return null
   return normalized
 }
@@ -762,6 +792,12 @@ function openclawProcessSpec(args = []) {
   if (!cliPath) throw new Error('openclaw CLI 未安装')
   if (isWindows) {
     const cliArg = /[\s&()]/.test(cliPath) ? `"${cliPath}"` : cliPath
+    if (path.extname(cliPath).toLowerCase() === '.js') {
+      return {
+        command: process.env.ComSpec || 'cmd.exe',
+        args: ['/d', '/s', '/c', 'node', cliArg, ...args],
+      }
+    }
     return {
       command: process.env.ComSpec || 'cmd.exe',
       args: ['/d', '/s', '/c', cliArg, ...args],
@@ -886,6 +922,126 @@ function recommendedIsNewer(recommended, current) {
     return versionGt(recommended, current)
   }
   return false
+}
+
+function cacheBustedSiteUrl(pathname, params = {}) {
+  const url = new URL(pathname, SITE_BASE_URL)
+  for (const [key, value] of Object.entries(params)) {
+    const normalized = String(value || '').trim()
+    if (normalized) url.searchParams.set(key, normalized)
+  }
+  url.searchParams.set('_t', Date.now().toString())
+  return url.toString()
+}
+
+function normalizeSiteLocale(locale) {
+  const value = String(locale || '').trim().toLowerCase()
+  return value.startsWith('zh') ? 'zh-CN' : 'en'
+}
+
+function normalizePublicUrl(raw) {
+  const value = String(raw || '').trim()
+  if (!value) return ''
+  let url
+  try {
+    url = value.startsWith('/') ? new URL(value, SITE_BASE_URL) : new URL(value)
+  } catch {
+    return ''
+  }
+  const host = url.hostname.toLowerCase()
+  if (host === 'claw.qt.cool') {
+    url.protocol = 'https:'
+    return url.toString()
+  }
+  if ((host === 'github.com' || host === 'api.github.com') && url.protocol === 'https:') {
+    return url.toString()
+  }
+  return ''
+}
+
+function normalizeSiteUrlFields(value) {
+  if (Array.isArray(value)) {
+    value.forEach(normalizeSiteUrlFields)
+    return value
+  }
+  if (!value || typeof value !== 'object') return value
+  for (const key of ['downloadUrl', 'url', 'ctaUrl']) {
+    if (typeof value[key] === 'string') {
+      const normalized = normalizePublicUrl(value[key])
+      if (normalized || value[key].trim()) value[key] = normalized
+    }
+  }
+  for (const child of Object.values(value)) normalizeSiteUrlFields(child)
+  return value
+}
+
+function assetDownloadable(asset) {
+  return asset?.source !== 'unavailable' && typeof asset?.downloadUrl === 'string' && asset.downloadUrl.trim()
+}
+
+function assetMatches(asset, key, expected) {
+  return String(asset?.[key] || '').toLowerCase() === expected
+}
+
+function selectRecommendedSiteAsset(assets = []) {
+  const targetPlatform = isWindows ? 'windows' : isMac ? 'macos' : isLinux ? 'linux' : ''
+  const targetArch = process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'x64' : process.arch
+  const platformCandidates = assets.filter(asset => assetDownloadable(asset) && assetMatches(asset, 'platform', targetPlatform))
+  const archMatches = (asset) => assetMatches(asset, 'arch', targetArch) || assetMatches(asset, 'arch', 'any')
+
+  const remoteRecommended = platformCandidates.find(asset => asset?.recommended === true && archMatches(asset))
+    || platformCandidates.find(asset => asset?.recommended === true)
+  if (remoteRecommended) return remoteRecommended
+
+  const candidates = assets.filter(assetDownloadable)
+  if (isWindows) {
+    const lightSetup = platformCandidates.find(asset => {
+      const name = String(asset?.name || '').toLowerCase()
+      return archMatches(asset)
+        && assetMatches(asset, 'fileType', 'exe')
+        && name.includes('x64-setup.exe')
+        && !name.includes('full')
+    })
+    if (lightSetup) return lightSetup
+    return platformCandidates.find(asset => archMatches(asset) && assetMatches(asset, 'fileType', 'exe')) || platformCandidates[0] || null
+  }
+  if (isMac) {
+    return platformCandidates.find(asset => archMatches(asset) && assetMatches(asset, 'fileType', 'dmg')) || platformCandidates[0] || null
+  }
+  if (isLinux) {
+    for (const fileType of ['appimage', 'deb', 'rpm']) {
+      const hit = platformCandidates.find(asset => assetMatches(asset, 'fileType', fileType))
+      if (hit) return hit
+    }
+  }
+  return platformCandidates[0] || candidates[0] || null
+}
+
+async function getSitePanelUpdate() {
+  const resp = await globalThis.fetch(cacheBustedSiteUrl('/api/v1/latest'), {
+    signal: AbortSignal.timeout(10000),
+    headers: { 'User-Agent': 'ClawPanel' },
+  })
+  if (!resp.ok) throw new Error(`site: HTTP ${resp.status}`)
+  const json = normalizeSiteUrlFields(await resp.json())
+  const latest = String(json.version || json.tagName || '').replace(/^v/, '').trim()
+  if (!latest) throw new Error('site: 未找到版本号')
+  const assets = Array.isArray(json.assets) ? json.assets : []
+  const recommendedAsset = selectRecommendedSiteAsset(assets)
+  return {
+    latest,
+    url: SITE_BASE_URL,
+    source: 'site',
+    downloadUrl: recommendedAsset?.downloadUrl || SITE_BASE_URL,
+    assets,
+    recommendedAsset: recommendedAsset || null,
+    releaseNotes: json.releaseNotes || '',
+    publishedAt: json.publishedAt || '',
+    tagName: json.tagName || '',
+    downloads: json.downloads || null,
+    telemetry: json.telemetry || null,
+    update: json.update || null,
+  }
 }
 
 function loadVersionPolicy() {
@@ -12010,11 +12166,17 @@ const handlers = {
   },
 
   async check_panel_update() {
+    let lastErr = ''
+    try {
+      return await getSitePanelUpdate()
+    } catch (e) {
+      lastErr = `site: ${e.message || e}`
+    }
+
     const sources = [
       { api: 'https://api.github.com/repos/qingchencloud/clawpanel/releases/latest', releases: 'https://github.com/qingchencloud/clawpanel/releases', name: 'github' },
       { api: 'https://gitee.com/api/v5/repos/QtCodeCreators/clawpanel/releases/latest', releases: 'https://gitee.com/QtCodeCreators/clawpanel/releases', name: 'gitee' },
     ]
-    let lastErr = ''
     for (const src of sources) {
       try {
         const resp = await globalThis.fetch(src.api, {
@@ -12029,6 +12191,20 @@ const handlers = {
       } catch (e) { lastErr = `${src.name}: ${e.message}`; continue }
     }
     return { latest: null, url: 'https://github.com/qingchencloud/clawpanel/releases', error: lastErr }
+  },
+
+  async check_site_announcements({ locale } = {}) {
+    const resp = await globalThis.fetch(cacheBustedSiteUrl('/api/v1/announcements', {
+      app: 'ClawPanel',
+      version: PANEL_VERSION,
+      locale: normalizeSiteLocale(locale),
+      surface: 'client',
+    }), {
+      signal: AbortSignal.timeout(10000),
+      headers: { 'User-Agent': 'ClawPanel' },
+    })
+    if (!resp.ok) throw new Error(`公告服务器返回 ${resp.status}`)
+    return normalizeSiteUrlFields(await resp.json())
   },
 
   write_env_file({ path: p, config }) {
@@ -14758,7 +14934,7 @@ const handlers = {
   download_frontend_update() { throw new Error('Web 模式无需前端热更新，刷新浏览器即可') },
   rollback_frontend_update() { throw new Error('Web 模式不支持前端热更新回滚') },
   get_update_status() { return { status: 'idle', mode: 'web' } },
-  // 注意：check_panel_update 的真实实现在前面（line ~6785）—— 走 GitHub/Gitee release API。
+  // 注意：check_panel_update 的真实实现在前面 —— 走官网 API，失败后再回退 GitHub/Gitee。
   // 这里不能再 stub，否则 object literal 的后定义会覆盖前者，导致 Web 模式永远看不到新版。
 
   // —— 应用重启（Web 端由 tauri-api.js 包装层直接调 location.reload，到这里说明绕过了包装）——

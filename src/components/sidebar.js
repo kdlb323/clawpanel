@@ -234,6 +234,7 @@ export function renderSidebar(el) {
   const isDark = getTheme() === 'dark'
   const sunIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'
   const moonIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>'
+  const bellIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>'
 
   const langCode = getLang()
   const langs = getAvailableLangs()
@@ -254,19 +255,22 @@ export function renderSidebar(el) {
 
   html += `
     <div class="sidebar-footer">
-      <div class="nav-item" id="btn-theme-toggle">
-        ${isDark ? sunIcon : moonIcon}
-        <span>${isDark ? t('sidebar.themeLight') : t('sidebar.themeDark')}</span>
-      </div>
-      <div class="lang-switcher" id="lang-switcher">
-        <button class="nav-item lang-trigger" id="btn-lang-toggle">
-          ${globeIcon}
-          <span>${currentLang.label}</span>
-          <svg class="lang-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M18 15l-6-6-6 6"/></svg>
+      <div class="sidebar-tools" aria-label="ClawPanel tools">
+        <button class="sidebar-tool-btn site-message-trigger" type="button" title="${t('siteMessages.title')}" aria-label="${t('siteMessages.title')}">
+          ${bellIcon}
+          <span class="site-message-tool-badge" aria-hidden="true"></span>
         </button>
-        <div class="lang-dropdown" id="lang-dropdown">
-          ${langs.length > 4 ? '<div class="lang-search-wrap"><input class="lang-search" id="lang-search" type="text" placeholder="Search..." autocomplete="off"></div>' : ''}
-          <div class="lang-options" id="lang-options">${langOptions}</div>
+        <button class="sidebar-tool-btn" id="btn-theme-toggle" type="button" title="${isDark ? t('sidebar.themeLight') : t('sidebar.themeDark')}" aria-label="${isDark ? t('sidebar.themeLight') : t('sidebar.themeDark')}">
+          ${isDark ? sunIcon : moonIcon}
+        </button>
+        <div class="lang-switcher" id="lang-switcher">
+          <button class="sidebar-tool-btn lang-trigger" id="btn-lang-toggle" type="button" title="${currentLang.label}" aria-label="${currentLang.label}">
+            ${globeIcon}
+          </button>
+          <div class="lang-dropdown" id="lang-dropdown">
+            ${langs.length > 4 ? '<div class="lang-search-wrap"><input class="lang-search" id="lang-search" type="text" placeholder="Search..." autocomplete="off"></div>' : ''}
+            <div class="lang-options" id="lang-options">${langOptions}</div>
+          </div>
         </div>
       </div>
       <div class="sidebar-meta">
@@ -277,6 +281,7 @@ export function renderSidebar(el) {
   `
 
   el.innerHTML = html
+  window.dispatchEvent(new CustomEvent('clawpanel:site-message-launcher-mounted'))
 
   // 应用折叠态（桌面端）
   _setDesktopSidebarCollapsed(collapsed)
@@ -513,4 +518,3 @@ function _filterLangOptions(query) {
     opt.style.display = (label.includes(q) || code.includes(q)) ? '' : 'none'
   })
 }
-

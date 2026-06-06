@@ -2439,6 +2439,10 @@ fn scan_all_installations(
         if crate::utils::is_rejected_cli_path(&path.to_string_lossy()) {
             return;
         }
+        #[cfg(target_os = "windows")]
+        if !crate::utils::is_windows_launchable_openclaw_path(&path) {
+            return;
+        }
         let identity = scan_cli_identity(&path);
         if seen.contains(&identity) {
             return;
@@ -2481,22 +2485,18 @@ fn scan_all_installations(
     #[cfg(target_os = "windows")]
     {
         if let Ok(appdata) = std::env::var("APPDATA") {
-            try_add(
-                std::path::PathBuf::from(&appdata)
-                    .join("npm")
-                    .join("openclaw.cmd"),
-            );
-            try_add(
-                std::path::PathBuf::from(&appdata)
-                    .join("npm")
-                    .join("openclaw"),
-            );
+            let appdata_npm = std::path::PathBuf::from(&appdata).join("npm");
+            try_add(appdata_npm.join("openclaw.cmd"));
+            try_add(appdata_npm.join("openclaw.exe"));
+            try_add(appdata_npm.join("openclaw.bat"));
+            try_add(appdata_npm.join("openclaw.js"));
         }
         if let Some(prefix) = super::windows_npm_global_prefix() {
             let prefix_path = std::path::PathBuf::from(prefix);
             try_add(prefix_path.join("openclaw.cmd"));
             try_add(prefix_path.join("openclaw.exe"));
-            try_add(prefix_path.join("openclaw"));
+            try_add(prefix_path.join("openclaw.bat"));
+            try_add(prefix_path.join("openclaw.js"));
         }
         if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
             let localappdata_path = std::path::PathBuf::from(&localappdata);
@@ -2675,18 +2675,34 @@ pub(crate) fn resolve_openclaw_cli_input_path(
         {
             candidates.push(input.join("openclaw.cmd"));
             candidates.push(input.join("openclaw.exe"));
-            candidates.push(input.join("openclaw"));
+            candidates.push(input.join("openclaw.bat"));
+            candidates.push(input.join("openclaw.js"));
         }
         #[cfg(not(target_os = "windows"))]
         {
             candidates.push(input.join("openclaw"));
         }
     } else {
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(resolved) = crate::utils::canonicalize_windows_openclaw_cli_path(&input) {
+                return Some(resolved);
+            }
+        }
         candidates.push(input);
     }
 
     candidates.into_iter().find(|candidate| {
-        candidate.exists() && !crate::utils::is_rejected_cli_path(&candidate.to_string_lossy())
+        candidate.exists() && !crate::utils::is_rejected_cli_path(&candidate.to_string_lossy()) && {
+            #[cfg(target_os = "windows")]
+            {
+                crate::utils::is_windows_launchable_openclaw_path(candidate)
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                true
+            }
+        }
     })
 }
 
@@ -6447,9 +6463,13 @@ pub fn patch_model_vision() -> Result<bool, String> {
     Ok(changed)
 }
 
-/// 检查 ClawPanel 自身是否有新版本（GitHub → Gitee 自动降级）
+/// 检查 ClawPanel 自身是否有新版本（官网 → GitHub → Gitee 自动降级）
 #[tauri::command]
 pub async fn check_panel_update() -> Result<Value, String> {
+    if let Ok(site) = super::site_api::site_latest_for_panel_update().await {
+        return Ok(site);
+    }
+
     let client =
         crate::commands::build_http_client(std::time::Duration::from_secs(8), Some("ClawPanel"))
             .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
@@ -7009,7 +7029,20 @@ pub fn invalidate_path_cache() -> Result<(), String> {
 #[cfg(test)]
 mod write_openclaw_config_merge_tests {
     use super::merge_configs_preserving_fields;
+    #[cfg(target_os = "windows")]
+    use super::resolve_openclaw_cli_input_path;
     use serde_json::json;
+    #[cfg(target_os = "windows")]
+    use std::path::PathBuf;
+
+    #[cfg(target_os = "windows")]
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("clawpanel-{name}-{}-{suffix}", std::process::id()))
+    }
 
     /// Regression guard: Issue #127 merge keeps full provider map when the UI payload
     /// only touches one provider — `sync_providers_to_agent_models` must use the same
@@ -7045,5 +7078,38 @@ mod write_openclaw_config_merge_tests {
             "merged config must retain provider b when the write payload omits it"
         );
         assert_eq!(prov["a"]["baseUrl"], json!("http://example"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_cli_input_rejects_extensionless_openclaw_shim() {
+        let dir = unique_temp_dir("extensionless-openclaw");
+        std::fs::create_dir_all(&dir).unwrap();
+        let bare = dir.join("openclaw");
+        std::fs::write(&bare, "#!/bin/sh\n").unwrap();
+
+        let resolved = resolve_openclaw_cli_input_path(&bare);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            resolved.is_none(),
+            "Windows must not treat extensionless npm shell shims as launchable CLI"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_cli_input_canonicalizes_bare_openclaw_to_cmd() {
+        let dir = unique_temp_dir("openclaw-cmd");
+        std::fs::create_dir_all(&dir).unwrap();
+        let bare = dir.join("openclaw");
+        let cmd = dir.join("openclaw.cmd");
+        std::fs::write(&bare, "#!/bin/sh\n").unwrap();
+        std::fs::write(&cmd, "@echo off\r\n").unwrap();
+
+        let resolved = resolve_openclaw_cli_input_path(&bare);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(resolved, Some(cmd));
     }
 }

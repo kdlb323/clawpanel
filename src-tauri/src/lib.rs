@@ -5,7 +5,7 @@ mod utils;
 
 use commands::{
     agent, assistant, cli_conflict, config, device, diagnose, extensions, hermes, hermes_providers,
-    logs, memory, messaging, pairing, service, skills, update,
+    logs, memory, messaging, pairing, service, site_api, skills, update,
 };
 
 pub fn run() {
@@ -67,6 +67,7 @@ pub fn run() {
         })
         .setup(|app| {
             service::start_backend_guardian(app.handle().clone());
+            site_api::start_heartbeat_loop();
             tray::setup_tray(app.handle())?;
             Ok(())
         })
@@ -120,6 +121,7 @@ pub fn run() {
             config::doctor_fix,
             config::doctor_check,
             config::relaunch_app,
+            site_api::check_site_announcements,
             // 设备密钥 + Gateway 握手
             device::create_connect_frame,
             // 设备配对

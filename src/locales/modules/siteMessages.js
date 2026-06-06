@@ -1,0 +1,28 @@
+import { _ } from '../helper.js'
+
+export default {
+  title: _('系统公告', 'System notices'),
+  summary: _('通知 {notifications} 条 · 公告 {announcements} 条', '{notifications} notifications · {announcements} announcements'),
+  notifications: _('通知', 'Notifications'),
+  announcements: _('系统公告', 'Announcements'),
+  announcementBadge: _('公告', 'Announcement'),
+  notificationFeed: _('通知动态', 'Notification feed'),
+  fixedAnnouncements: _('固定公告', 'Pinned announcements'),
+  sortedByTime: _('按时间倒序', 'Newest first'),
+  managedBySite: _('由官网统一发布', 'Published by the official site'),
+  levelCritical: _('紧急', 'Critical'),
+  levelWarning: _('重要', 'Important'),
+  levelSuccess: _('正常', 'Normal'),
+  levelInfo: _('提示', 'Info'),
+  closeToday: _('今日关闭', 'Close today'),
+  closeCurrent: _('关闭公告', 'Close notices'),
+  emptyNotifications: _('暂无通知', 'No notifications'),
+  emptyNotificationsHint: _('重要通知会按时间显示在这里。', 'Important notices will appear here in chronological order.'),
+  emptyAnnouncements: _('暂无系统公告', 'No announcements'),
+  emptyAnnouncementsHint: _('官网固定公告会显示在这里。', 'Pinned official announcements will appear here.'),
+  defaultTitle: _('ClawPanel 通知', 'ClawPanel notice'),
+  timeUnknown: _('时间未知', 'Unknown time'),
+  today: _('今天', 'Today'),
+  daysAgo: _(' 天前', ' days ago'),
+  monthsAgo: _(' 个月前', ' months ago'),
+}

@@ -1068,18 +1068,19 @@ body[data-active-engine="xintian"] .sidebar-footer {
   border-top: 1px solid rgba(27, 20, 16, 0.06);
   padding: 8px 10px;
 }
-body[data-active-engine="xintian"] #btn-theme-toggle,
-body[data-active-engine="xintian"] .lang-trigger {
-  padding: 8px 14px;
-  border-radius: 6px;
+body[data-active-engine="xintian"] .sidebar-tools > .sidebar-tool-btn,
+body[data-active-engine="xintian"] .sidebar-tools > .lang-switcher > .sidebar-tool-btn {
+  min-height: 32px;
+  padding: 0;
+  border-radius: 9px;
   color: #7A6A5B;
   font-size: 12.5px;
   transition: background 180ms, color 180ms;
 }
-body[data-active-engine="xintian"] #btn-theme-toggle:hover,
-body[data-active-engine="xintian"] .lang-trigger:hover {
+body[data-active-engine="xintian"] .sidebar-tools > .sidebar-tool-btn:hover,
+body[data-active-engine="xintian"] .sidebar-tools > .lang-switcher > .sidebar-tool-btn:hover {
   background: rgba(27, 20, 16, 0.04);
-  color: #1B1410;
+  color: #EA580C;
 }
 body[data-active-engine="xintian"] .lang-dropdown {
   background: #FFFFFF;
@@ -1181,14 +1182,14 @@ body[data-active-engine="xintian"] .sidebar-version { color: #A99A8B; }
 [data-theme="dark"] body[data-active-engine="xintian"] .sidebar-footer {
   border-top-color: rgba(255, 244, 230, 0.06);
 }
-[data-theme="dark"] body[data-active-engine="xintian"] #btn-theme-toggle,
-[data-theme="dark"] body[data-active-engine="xintian"] .lang-trigger {
+[data-theme="dark"] body[data-active-engine="xintian"] .sidebar-tools > .sidebar-tool-btn,
+[data-theme="dark"] body[data-active-engine="xintian"] .sidebar-tools > .lang-switcher > .sidebar-tool-btn {
   color: #B39C83;
 }
-[data-theme="dark"] body[data-active-engine="xintian"] #btn-theme-toggle:hover,
-[data-theme="dark"] body[data-active-engine="xintian"] .lang-trigger:hover {
+[data-theme="dark"] body[data-active-engine="xintian"] .sidebar-tools > .sidebar-tool-btn:hover,
+[data-theme="dark"] body[data-active-engine="xintian"] .sidebar-tools > .lang-switcher > .sidebar-tool-btn:hover {
   background: rgba(255, 244, 230, 0.05);
-  color: #FFF4E6;
+  color: #FB923C;
 }
 [data-theme="dark"] body[data-active-engine="xintian"] .lang-dropdown {
   background: #2E1F16;

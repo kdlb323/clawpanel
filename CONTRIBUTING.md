@@ -135,8 +135,8 @@ clawpanel/
 │   ├── build.sh                #   macOS/Linux 编译与打包
 │   ├── linux-deploy.sh         #   Linux 服务器一键部署
 │   └── sync-version.js         #   版本号同步脚本
-├── docs/                       # 文档与截图
-│   ├── index.html              #   官网（claw.qt.cool）
+├── docs/                       # 文档、截图与更新清单
+│   ├── update/latest.json      #   旧版前端热更新清单
 │   ├── linux-deploy.md         #   Linux 部署指南
 │   └── docker-deploy.md        #   Docker 部署指南
 ├── public/                     # 静态资源（图标、Logo）
@@ -197,7 +197,6 @@ tauri-api.js  →  isTauri?
 | `package.json` | `version` | **主版本源** — npm、前端构建、侧边栏显示 |
 | `src-tauri/tauri.conf.json` | `version` | Tauri 打包版本号 |
 | `src-tauri/Cargo.toml` | `version` | Rust crate 版本号 |
-| `docs/index.html` | `softwareVersion` | 官网 JSON-LD SEO |
 | `CHANGELOG.md` | `## [x.y.z]` | 变更日志（需手动编写内容） |
 
 ### 同步命令
@@ -228,7 +227,7 @@ import { version as APP_VERSION } from '../../package.json'
 # 1. 确认工作区干净
 git status
 
-# 2. 设置新版本号（自动同步到 tauri.conf.json / Cargo.toml / docs/index.html）
+# 2. 设置新版本号（自动同步到 tauri.conf.json / Cargo.toml / Cargo.lock）
 npm run version:set 0.6.0
 
 # 3. 编写 CHANGELOG.md 变更记录

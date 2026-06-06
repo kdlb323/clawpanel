@@ -239,7 +239,9 @@ async function _loadDashboardDataInner(page, fullRefresh, loadSeq) {
   }
   // 每个请求独立超时：避免单个慢请求拖垮整体渲染
   const coreP = Promise.allSettled([
-    withTimeout(api.getServicesStatus(), 2500),
+    // Windows 后端在端口未监听时最多会做 1s + 300ms + 2s 的 TCP 检测；
+    // 这里留出余量，避免 Gateway 停止时被误报为“服务状态加载失败”。
+    withTimeout(api.getServicesStatus(), 4500),
     withTimeout(api.readOpenclawConfig(), 2000),
     withTimeout(api.readPanelConfig(), 2000),
   ])

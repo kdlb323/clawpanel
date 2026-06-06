@@ -85,6 +85,11 @@ export function clearRequestLogs() {
   _requestLogs.length = 0
 }
 
+function normalizeSiteLocale(locale) {
+  const value = String(locale || '').trim().toLowerCase()
+  return value.startsWith('zh') ? 'zh-CN' : 'en'
+}
+
 function cachedInvoke(cmd, args = {}, ttl = CACHE_TTL) {
   const key = cmd + JSON.stringify(args)
   const cached = _cache.get(key)
@@ -395,6 +400,7 @@ export const api = {
   getDeployConfig: () => cachedInvoke('get_deploy_config'),
   patchModelVision: () => invoke('patch_model_vision'),
   checkPanelUpdate: () => invoke('check_panel_update'),
+  checkSiteAnnouncements: (locale) => invoke('check_site_announcements', { locale: normalizeSiteLocale(locale) }),
   writeEnvFile: (path, config) => invoke('write_env_file', { path, config }),
 
   // 备份管理
