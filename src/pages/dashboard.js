@@ -16,6 +16,7 @@ let _unsubGw = null
 let _dashboardLoadChain = Promise.resolve()
 let _lastGwChangeLoad = 0
 let _detachCliConflict = null
+let _dashboardRuntimeRefreshHandler = null
 
 export async function render() {
   const page = document.createElement('div')
@@ -86,12 +87,25 @@ export async function render() {
     loadDashboardData(page)
   })
 
+  if (_dashboardRuntimeRefreshHandler) window.removeEventListener('openclaw:runtime-changed', _dashboardRuntimeRefreshHandler)
+  _dashboardRuntimeRefreshHandler = () => {
+    _dashboardInitialized = false
+    _dashboardVersionCache = null
+    _dashboardStatusSummaryCache = null
+    loadDashboardData(page, true).catch(() => {})
+  }
+  window.addEventListener('openclaw:runtime-changed', _dashboardRuntimeRefreshHandler)
+
   return page
 }
 
 export function cleanup() {
   if (_unsubGw) { _unsubGw(); _unsubGw = null }
   if (_detachCliConflict) { try { _detachCliConflict() } catch (_) {} _detachCliConflict = null }
+  if (_dashboardRuntimeRefreshHandler) {
+    window.removeEventListener('openclaw:runtime-changed', _dashboardRuntimeRefreshHandler)
+    _dashboardRuntimeRefreshHandler = null
+  }
 }
 
 function openclawInstallationIdentity(installation) {

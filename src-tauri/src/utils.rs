@@ -312,8 +312,25 @@ pub fn classify_cli_source(cli_path: &str) -> String {
     if lower.contains("openclaw-zh") || lower.contains("@qingchencloud") {
         return "npm-zh".into();
     }
+    #[cfg(target_os = "windows")]
+    {
+        if lower.ends_with("/openclaw.cmd") || lower.ends_with("/openclaw.bat") {
+            if let Ok(content) = std::fs::read_to_string(cli_path) {
+                let content = content.to_lowercase();
+                if content.contains("@qingchencloud") || content.contains("openclaw-zh") {
+                    return "npm-zh".into();
+                }
+                if content.contains("/node_modules/openclaw/")
+                    || content.contains("\\node_modules\\openclaw\\")
+                {
+                    return "npm-official".into();
+                }
+            }
+        }
+    }
     // npm 全局（大概率官方版）
-    if lower.contains("/npm/") || lower.contains("/node_modules/") {
+    if lower.contains("/npm/") || lower.contains("/npm-global/") || lower.contains("/node_modules/")
+    {
         return "npm-official".into();
     }
     // Homebrew

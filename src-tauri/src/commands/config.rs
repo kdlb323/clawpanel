@@ -814,6 +814,65 @@ pub fn save_openclaw_json(config: &Value) -> Result<(), String> {
     write_openclaw_config(config.clone())
 }
 
+fn model_env_values_for_config(config: &Value) -> HashMap<String, String> {
+    let mut values = HashMap::new();
+    if let Some(env) = config.get("env").and_then(|v| v.as_object()) {
+        for (key, value) in env {
+            if !is_valid_env_key(key) {
+                continue;
+            }
+            if let Some(s) = value.as_str() {
+                values.insert(key.clone(), s.to_string());
+            } else if value.is_number() || value.is_boolean() {
+                values.insert(key.clone(), value.to_string());
+            }
+        }
+    }
+    let env_path = super::openclaw_dir().join(".env");
+    if let Ok(content) = fs::read_to_string(env_path) {
+        for line in content.lines() {
+            if let Some((key, value)) = parse_dotenv_line(line) {
+                values.entry(key).or_insert(value);
+            }
+        }
+    }
+    values
+}
+
+fn validate_model_provider_env_refs(config: &Value) -> Result<(), String> {
+    let values = model_env_values_for_config(config);
+    let Some(providers) = config
+        .get("models")
+        .and_then(|v| v.get("providers"))
+        .and_then(|v| v.as_object())
+    else {
+        return Ok(());
+    };
+
+    for (provider_name, provider) in providers {
+        let Some(api_key) = provider.get("apiKey").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(env_key) = model_api_key_env_ref(api_key)? else {
+            continue;
+        };
+        let configured = values
+            .get(&env_key)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+        let process_env = std::env::var(&env_key)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+        if !configured && !process_env {
+            return Err(format!(
+                "模型服务商 \"{provider_name}\" 的 API Key 引用了缺失的环境变量 \"{env_key}\"。请先在 OpenClaw env、~/.openclaw/.env 或当前进程环境中补齐，或删除该服务商后再保存。"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// 供其他模块复用：触发 Gateway 重载
 pub async fn do_reload_gateway(app: &tauri::AppHandle) -> Result<String, String> {
     reload_gateway_internal(Some(app)).await
@@ -845,6 +904,7 @@ pub fn write_openclaw_config(config: Value) -> Result<(), String> {
 
     // 清理 UI 专属字段，避免 CLI schema 校验失败
     let cleaned = strip_ui_fields(merged);
+    validate_model_provider_env_refs(&cleaned)?;
 
     // 写入
     let json = serde_json::to_string_pretty(&cleaned).map_err(|e| format!("序列化失败: {e}"))?;
@@ -3093,6 +3153,29 @@ fn npm_global_bin_dir() -> Option<PathBuf> {
     }
 }
 
+fn npm_openclaw_cli_path() -> Option<PathBuf> {
+    let bin_dir = npm_global_bin_dir()?;
+    #[cfg(target_os = "windows")]
+    {
+        for name in [
+            "openclaw.cmd",
+            "openclaw.exe",
+            "openclaw.bat",
+            "openclaw.js",
+        ] {
+            let candidate = bin_dir.join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        Some(bin_dir.join("openclaw.cmd"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Some(bin_dir.join("openclaw"))
+    }
+}
+
 /// 尝试从 standalone 独立安装包安装 OpenClaw（自带 Node.js，零依赖）
 /// 动态查询 latest.json 获取最新版本，下载对应平台的归档并解压
 /// 成功返回 Ok(版本号)，失败返回 Err(原因) 供 caller 降级到 R2/npm
@@ -3313,6 +3396,21 @@ async fn try_standalone_install(
         return Err("standalone 解压后未找到 openclaw 可执行文件".into());
     }
 
+    let verified_version = read_version_from_installation(&openclaw_bin)
+        .ok_or_else(|| "standalone 安装后无法读取目标 CLI 版本，已保留旧绑定".to_string())?;
+    if !versions_match(&verified_version, remote_version) {
+        return Err(format!(
+            "standalone 安装校验失败：目标 CLI 版本为 {verified_version}，清单版本为 {remote_version}，已保留旧绑定"
+        ));
+    }
+    let _ = app.emit(
+        "upgrade-log",
+        format!(
+            "目标 CLI 验证通过: {} ({verified_version})",
+            openclaw_bin.display()
+        ),
+    );
+
     // 7. 添加到 PATH（Windows 用户 PATH，Unix 创建 symlink）
     #[cfg(target_os = "windows")]
     {
@@ -3387,10 +3485,19 @@ async fn try_standalone_install(
         format!("安装目录: {}", install_dir.display()),
     );
 
-    // 刷新 CLI 检测缓存
-    crate::commands::service::invalidate_cli_detection_cache();
+    match bind_openclaw_cli_path(&openclaw_bin) {
+        Ok(()) => {
+            let _ = app.emit(
+                "upgrade-log",
+                format!("已切换当前 CLI: {}", openclaw_bin.display()),
+            );
+        }
+        Err(err) => {
+            let _ = app.emit("upgrade-log", format!("⚠️ 自动绑定当前 CLI 失败: {err}"));
+        }
+    }
 
-    Ok(remote_version.to_string())
+    Ok(verified_version)
 }
 
 /// 尝试从 R2 CDN 下载预装归档安装 OpenClaw（跳过 npm 依赖解析）
@@ -3710,6 +3817,32 @@ async fn upgrade_openclaw_inner(
         .or(recommended_version.as_deref())
         .unwrap_or("latest");
     let pkg = format!("{}@{}", pkg_name, ver);
+    let active_cli_before = crate::utils::resolve_openclaw_cli_path();
+    let current_version_before = get_local_version().await;
+    let installations_before = scan_all_installations(&active_cli_before);
+    let _ = app.emit("upgrade-log", "升级前扫描当前 OpenClaw 安装...");
+    let _ = app.emit(
+        "upgrade-log",
+        format!(
+            "当前使用: {}{}",
+            active_cli_before
+                .as_deref()
+                .unwrap_or("未检测到 openclaw CLI"),
+            current_version_before
+                .as_ref()
+                .map(|v| format!(" ({v})"))
+                .unwrap_or_default()
+        ),
+    );
+    if installations_before.len() > 1 {
+        let _ = app.emit(
+            "upgrade-log",
+            format!(
+                "检测到 {} 个 OpenClaw 安装；升级成功后会切换到新版，旧安装不会自动删除。",
+                installations_before.len()
+            ),
+        );
+    }
 
     // ── standalone 安装（auto / standalone-r2 / standalone-github） ──
     let try_standalone = source != "official"
@@ -3730,6 +3863,10 @@ async fn upgrade_openclaw_inner(
                     crate::commands::service::invalidate_cli_detection_cache();
                     let msg = format!("✅ standalone (GitHub) 安装完成，当前版本: {installed_ver}");
                     let _ = app.emit("upgrade-log", &msg);
+                    let _ = app.emit(
+                        "upgrade-log",
+                        "旧安装已保留。如需清理，请在“安装管理与清理”里确认后处理。",
+                    );
                     return Ok(msg);
                 }
                 Err(reason) => {
@@ -3745,6 +3882,10 @@ async fn upgrade_openclaw_inner(
                     crate::commands::service::invalidate_cli_detection_cache();
                     let msg = format!("✅ standalone (CDN) 安装完成，当前版本: {installed_ver}");
                     let _ = app.emit("upgrade-log", &msg);
+                    let _ = app.emit(
+                        "upgrade-log",
+                        "旧安装已保留。如需清理，请在“安装管理与清理”里确认后处理。",
+                    );
                     return Ok(msg);
                 }
                 Err(cdn_reason) => {
@@ -3763,6 +3904,10 @@ async fn upgrade_openclaw_inner(
                                 "✅ standalone (GitHub) 安装完成，当前版本: {installed_ver}"
                             );
                             let _ = app.emit("upgrade-log", &msg);
+                            let _ = app.emit(
+                                "upgrade-log",
+                                "旧安装已保留。如需清理，请在“安装管理与清理”里确认后处理。",
+                            );
                             return Ok(msg);
                         }
                         Err(gh_reason) => {
@@ -4108,6 +4253,55 @@ async fn upgrade_openclaw_inner(
         }
     }
 
+    if need_uninstall_old {
+        let _ = app.emit(
+            "upgrade-log",
+            "正在修复 npm CLI 入口（避免旧包卸载删除 openclaw.cmd）...",
+        );
+        let mut repair_cmd = npm_command_elevated();
+        repair_cmd.args(["install", "-g", &pkg, "--force", "--registry", registry]);
+        apply_git_install_env(&mut repair_cmd);
+        match repair_cmd
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+        {
+            Ok(o) if o.status.success() => {
+                let _ = app.emit("upgrade-log", "npm CLI 入口已确认");
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return Err(format!(
+                    "安装完成但修复 npm CLI 入口失败: {}",
+                    stderr.trim()
+                ));
+            }
+            Err(e) => return Err(format!("安装完成但修复 npm CLI 入口失败: {e}")),
+        }
+    }
+
+    super::refresh_enhanced_path();
+    crate::commands::service::invalidate_cli_detection_cache();
+
+    let npm_cli = npm_openclaw_cli_path()
+        .ok_or_else(|| "安装完成但无法确定 npm openclaw CLI 路径".to_string())?;
+    let new_ver = read_version_from_installation(&npm_cli)
+        .or_else(|| {
+            crate::utils::resolve_openclaw_cli_path()
+                .and_then(|p| read_version_from_installation(std::path::Path::new(&p)))
+        })
+        .ok_or_else(|| format!("安装完成但无法读取 OpenClaw 版本: {}", npm_cli.display()))?;
+    if ver != "latest" && !versions_match(&new_ver, ver) {
+        return Err(format!(
+            "安装校验失败：目标 CLI 版本为 {new_ver}，期望版本为 {ver}"
+        ));
+    }
+    bind_openclaw_cli_path(&npm_cli)?;
+    let _ = app.emit(
+        "upgrade-log",
+        format!("已切换当前 CLI: {} ({new_ver})", npm_cli.display()),
+    );
+
     // 切换源后重装 Gateway 服务
     if need_uninstall_old {
         let _ = app.emit("upgrade-log", "正在重装 Gateway 服务（更新启动路径）...");
@@ -4157,7 +4351,6 @@ async fn upgrade_openclaw_inner(
     super::refresh_enhanced_path();
     crate::commands::service::invalidate_cli_detection_cache();
 
-    let new_ver = get_local_version().await.unwrap_or_else(|| "未知".into());
     let msg = format!("✅ 安装完成，当前版本: {new_ver}");
     let _ = app.emit("upgrade-log", &msg);
     Ok(msg)
@@ -5541,7 +5734,7 @@ fn scan_json_client_file(
         .unwrap_or_else(|| default_model.to_string());
     let (api_key, status) = first_env_ref(env_keys);
     let warning = if status == "missing" {
-        "未在当前进程环境中检测到对应 API Key 环境变量，导入后需要在 OpenClaw env 或 .env 中补齐。"
+        "未在当前进程环境中检测到对应 API Key 环境变量。请先在 OpenClaw env 或 .env 中补齐后再导入。"
     } else {
         ""
     };
@@ -5557,7 +5750,7 @@ fn scan_json_client_file(
         &api_key,
         &status,
         vec![model],
-        true,
+        status != "missing",
         "",
         warning,
     );
@@ -5633,7 +5826,7 @@ pub fn scan_model_client_configs() -> Result<Value, String> {
             } else if status == "none" {
                 "Codex 配置没有声明可安全引用的 env_key，无法自动导入 API Key。请在 Codex 配置中添加 env_key，或在 OpenClaw 中手动配置服务商密钥。"
             } else if status == "missing" {
-                "未在当前进程环境中检测到 Codex 配置引用的 API Key 环境变量，导入后需要在 OpenClaw env 或 .env 中补齐。"
+                "未在当前进程环境中检测到 Codex 配置引用的 API Key 环境变量。请先在 OpenClaw env 或 .env 中补齐后再导入。"
             } else {
                 ""
             };
@@ -5649,7 +5842,7 @@ pub fn scan_model_client_configs() -> Result<Value, String> {
                 &api_key,
                 status,
                 vec![model],
-                !is_external_codex && status != "none",
+                !is_external_codex && status != "none" && status != "missing",
                 if is_external_codex {
                     "hermes auth login openai-codex"
                 } else {
@@ -6535,6 +6728,23 @@ pub fn write_panel_config(config: Value) -> Result<(), String> {
     }
     let json = serde_json::to_string_pretty(&config).map_err(|e| format!("序列化失败: {e}"))?;
     fs::write(&path, json).map_err(|e| format!("写入失败: {e}"))
+}
+
+fn bind_openclaw_cli_path(cli_path: &std::path::Path) -> Result<(), String> {
+    let mut config = read_panel_config().unwrap_or_else(|_| json!({}));
+    if !config.is_object() {
+        config = json!({});
+    }
+    if let Some(obj) = config.as_object_mut() {
+        obj.insert(
+            "openclawCliPath".into(),
+            Value::String(cli_path.to_string_lossy().to_string()),
+        );
+    }
+    write_panel_config(config)?;
+    super::refresh_enhanced_path();
+    crate::commands::service::invalidate_cli_detection_cache();
+    Ok(())
 }
 
 /// 重启应用（用于设置变更后自动重启）

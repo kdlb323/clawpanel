@@ -872,6 +872,7 @@ async function boot() {
             setDefaultRoute('/setup')
             navigate('/setup')
           }
+          window.dispatchEvent(new CustomEvent('openclaw:runtime-changed'))
         }
         await listen('upgrade-done', refreshAfterTask)
         await listen('upgrade-error', refreshAfterTask)
@@ -891,17 +892,12 @@ async function autoConnectWebSocket() {
     const rawPassword = config?.gateway?.auth?.password
     const password = (typeof rawPassword === 'string') ? rawPassword : ''
 
-    // 启动前先确保设备已配对 + allowedOrigins 已写入，无需用户手动操作
+    // 启动前先确保设备已配对 + allowedOrigins 已写入，无需用户手动操作。
+    // 不在这里自动重启 Gateway：Windows 上手动启动的 Gateway 会被 stop/restart 打断。
     let needReload = false
     try {
       const pairResult = await api.autoPairDevice()
       console.log('[main] 设备配对 + origins 已就绪:', pairResult)
-      // 仅在配置实际变更时才需要 reload（dev-api 返回 {changed}，Tauri 返回字符串）
-      if (typeof pairResult === 'object' && pairResult.changed) {
-        needReload = true
-      } else if (typeof pairResult === 'string' && pairResult !== '设备已配对') {
-        needReload = true
-      }
     } catch (pairErr) {
       console.warn('[main] autoPairDevice 失败（非致命）:', pairErr)
     }

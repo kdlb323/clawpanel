@@ -267,6 +267,96 @@ const PANEL_VERSION = (() => {
 })()
 const SITE_BASE_URL = 'https://claw.qt.cool'
 const VERSION_POLICY_PATH = path.join(__dev_dirname, '..', 'openclaw-version-policy.json')
+
+function ensureArrayContains(value, required) {
+  const current = Array.isArray(value)
+    ? value.filter(item => typeof item === 'string')
+    : []
+  let changed = !Array.isArray(value) || current.length !== value.length
+  for (const item of required) {
+    if (!current.includes(item)) {
+      current.push(item)
+      changed = true
+    }
+  }
+  return { value: current, changed }
+}
+
+function generatePairingToken() {
+  return crypto.randomBytes(32).toString('base64url')
+}
+
+function operatorTokenIsUsable(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false
+  if (entry.revokedAtMs != null) return false
+  if (entry.role !== 'operator') return false
+  if (typeof entry.token !== 'string' || !entry.token.trim()) return false
+  if (!Array.isArray(entry.scopes)) return false
+  return SCOPES.every(scope => entry.scopes.includes(scope))
+}
+
+function ensureOperatorToken(entry, nowMs = Date.now()) {
+  if (!entry.tokens || typeof entry.tokens !== 'object' || Array.isArray(entry.tokens)) {
+    entry.tokens = {}
+  }
+  if (operatorTokenIsUsable(entry.tokens.operator)) return false
+
+  const existing = entry.tokens.operator && typeof entry.tokens.operator === 'object' && !Array.isArray(entry.tokens.operator)
+    ? entry.tokens.operator
+    : null
+  entry.tokens.operator = {
+    token: typeof existing?.token === 'string' && existing.token.trim() ? existing.token : generatePairingToken(),
+    role: 'operator',
+    scopes: SCOPES,
+    createdAtMs: Number.isFinite(Number(existing?.createdAtMs)) && Number(existing.createdAtMs) > 0
+      ? Number(existing.createdAtMs)
+      : nowMs,
+    rotatedAtMs: nowMs,
+  }
+  if (Number.isFinite(Number(existing?.lastUsedAtMs)) && Number(existing.lastUsedAtMs) > 0) {
+    entry.tokens.operator.lastUsedAtMs = Number(existing.lastUsedAtMs)
+  }
+  return true
+}
+
+function normalizeControlUiPairingEntry(entry, deviceId, publicKey, platform, nowMs = Date.now()) {
+  const next = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : {}
+  let changed = next !== entry
+  const setString = (key, value) => {
+    if (next[key] === value) return
+    next[key] = value
+    changed = true
+  }
+
+  setString('deviceId', deviceId)
+  setString('publicKey', publicKey)
+  setString('platform', platform)
+  setString('deviceFamily', 'desktop')
+  setString('clientId', 'openclaw-control-ui')
+  setString('clientMode', 'ui')
+  setString('role', 'operator')
+
+  for (const [key, required] of [['roles', ['operator']], ['scopes', SCOPES], ['approvedScopes', SCOPES]]) {
+    const normalized = ensureArrayContains(next[key], required)
+    if (normalized.changed) {
+      next[key] = normalized.value
+      changed = true
+    }
+  }
+
+  changed = ensureOperatorToken(next, nowMs) || changed
+  if (!Number.isFinite(Number(next.createdAtMs)) || Number(next.createdAtMs) <= 0) {
+    next.createdAtMs = nowMs
+    changed = true
+  }
+  if (changed || !Number.isFinite(Number(next.approvedAtMs)) || Number(next.approvedAtMs) <= 0) {
+    next.approvedAtMs = nowMs
+    changed = true
+  }
+
+  return { entry: next, changed }
+}
+
 function normalizeCustomOpenclawDir(raw) {
   if (typeof raw !== 'string') return null
   const trimmed = raw.trim()
@@ -466,7 +556,7 @@ function classifyCliSource(cliPath) {
     const shimSource = detectWindowsShimSource(normalized)
     if (shimSource) return shimSource
   }
-  if (lower.includes('/npm/') || lower.includes('/node_modules/')) return 'npm-official'
+  if (lower.includes('/npm/') || lower.includes('/npm-global/') || lower.includes('/node_modules/')) return 'npm-official'
   if (lower.includes('/homebrew/') || lower.includes('/usr/local/bin/') || lower.includes('/usr/bin/')) return 'npm-global'
   return 'unknown'
 }
@@ -560,6 +650,27 @@ function readWindowsNpmGlobalPrefix() {
     if (prefix && prefix.toLowerCase() !== 'undefined') return prefix
   } catch {}
   return null
+}
+
+function npmOpenclawCliPath() {
+  const binDir = isWindows
+    ? (readWindowsNpmGlobalPrefix() || (process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : null))
+    : (() => {
+        try {
+          const prefix = execSync('npm config get prefix', { timeout: 5000, windowsHide: true, encoding: 'utf8' }).trim()
+          if (prefix && prefix.toLowerCase() !== 'undefined') return path.join(prefix, 'bin')
+        } catch {}
+        return '/usr/local/bin'
+      })()
+  if (!binDir) return null
+  const names = isWindows
+    ? ['openclaw.cmd', 'openclaw.exe', 'openclaw.bat', 'openclaw.js']
+    : ['openclaw']
+  for (const name of names) {
+    const candidate = path.join(binDir, name)
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return path.join(binDir, names[0])
 }
 
 function addCommonOpenclawCandidates(candidates, seen) {
@@ -1223,8 +1334,25 @@ async function _tryStandaloneInstall(version, logs, overrideBaseUrl = null) {
     throw new Error('standalone 解压后未找到 openclaw 可执行文件')
   }
 
-  logs.push(`✅ standalone 安装完成 (${remoteVersion})`)
+  const cliPath = path.join(installDir, binFile)
+  const verifiedVersion = readVersionFromInstallation(cliPath)
+  if (!verifiedVersion) {
+    throw new Error('standalone 安装后无法读取目标 CLI 版本，已保留旧绑定')
+  }
+  if (!versionsMatch(verifiedVersion, remoteVersion)) {
+    throw new Error(`standalone 安装校验失败：目标 CLI 版本为 ${verifiedVersion}，清单版本为 ${remoteVersion}，已保留旧绑定`)
+  }
+  logs.push(`目标 CLI 验证通过: ${cliPath} (${verifiedVersion})`)
+  try {
+    bindOpenclawCliPath(cliPath)
+    logs.push(`已切换当前 CLI: ${cliPath}`)
+  } catch (e) {
+    logs.push(`⚠️ 自动绑定当前 CLI 失败: ${e.message || e}`)
+  }
+
+  logs.push(`✅ standalone 安装完成 (${verifiedVersion})`)
   logs.push(`安装目录: ${installDir}`)
+  logs.push('旧安装已保留。如需清理，请在“安装管理与清理”里确认后处理。')
   return true
 }
 
@@ -1850,6 +1978,38 @@ function readPanelConfig() {
   return {}
 }
 
+function writePanelConfigFile(config) {
+  const nextConfig = config && typeof config === 'object' && !Array.isArray(config) ? { ...config } : {}
+  if (typeof nextConfig.openclawDir === 'string') {
+    const trimmed = nextConfig.openclawDir.trim()
+    if (trimmed) nextConfig.openclawDir = trimmed
+    else delete nextConfig.openclawDir
+  } else if (nextConfig.openclawDir == null) {
+    delete nextConfig.openclawDir
+  }
+  for (const key of ['dockerEndpoint', 'dockerDefaultImage']) {
+    if (typeof nextConfig[key] === 'string') {
+      const trimmed = nextConfig[key].trim()
+      if (trimmed) nextConfig[key] = trimmed
+      else delete nextConfig[key]
+    } else if (nextConfig[key] == null) {
+      delete nextConfig[key]
+    }
+  }
+  const panelDir = path.dirname(PANEL_CONFIG_PATH)
+  if (!fs.existsSync(panelDir)) fs.mkdirSync(panelDir, { recursive: true })
+  fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(nextConfig, null, 2))
+  invalidateConfigCache()
+  applyOpenclawPathConfig(nextConfig)
+}
+
+function bindOpenclawCliPath(cliPath) {
+  const resolved = resolveOpenclawCliInput(cliPath) || cliPath
+  const cfg = readPanelConfig()
+  cfg.openclawCliPath = resolved
+  writePanelConfigFile(cfg)
+}
+
 function normalizeDockerEndpoint(raw) {
   if (typeof raw !== 'string') return null
   let value = raw.trim()
@@ -2457,8 +2617,44 @@ function mergeConfigsPreservingFields(existing, next) {
   return merged
 }
 
+function modelEnvValuesForConfig(config) {
+  const values = {}
+  if (config?.env && typeof config.env === 'object' && !Array.isArray(config.env)) {
+    for (const [key, value] of Object.entries(config.env)) {
+      if (!isValidEnvKey(key)) continue
+      if (typeof value === 'string') values[key] = value
+      else if (typeof value === 'number' || typeof value === 'boolean') values[key] = String(value)
+    }
+  }
+  const envPath = path.join(OPENCLAW_DIR, '.env')
+  if (fs.existsSync(envPath)) {
+    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+      const parsed = parseDotenvLine(line)
+      if (parsed && values[parsed[0]] === undefined) values[parsed[0]] = parsed[1]
+    }
+  }
+  return values
+}
+
+function validateModelProviderEnvRefs(config) {
+  const providers = config?.models?.providers
+  if (!providers || typeof providers !== 'object' || Array.isArray(providers)) return
+  const values = modelEnvValuesForConfig(config)
+  for (const [providerName, provider] of Object.entries(providers)) {
+    if (!provider || typeof provider !== 'object') continue
+    const envKey = modelApiKeyEnvRef(provider.apiKey)
+    if (!envKey) continue
+    const configured = values[envKey] !== undefined && String(values[envKey]).trim()
+    const processEnv = process.env[envKey] !== undefined && String(process.env[envKey]).trim()
+    if (!configured && !processEnv) {
+      throw new Error(`模型服务商 "${providerName}" 的 API Key 引用了缺失的环境变量 "${envKey}"。请先在 OpenClaw env、~/.openclaw/.env 或当前进程环境中补齐，或删除该服务商后再保存。`)
+    }
+  }
+}
+
 function writeOpenclawConfigFile(config) {
   const cleaned = stripUiFields(config)
+  validateModelProviderEnvRefs(cleaned)
   if (fs.existsSync(CONFIG_PATH)) fs.copyFileSync(CONFIG_PATH, CONFIG_PATH + '.bak')
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cleaned, null, 2))
 }
@@ -8585,7 +8781,8 @@ function _scanJsonClientFile(out, data) {
     apiKey,
     apiKeyStatus,
     models: [model],
-    warning: apiKeyStatus === 'missing' ? '未在当前进程环境中检测到对应 API Key 环境变量，导入后需要在 OpenClaw env 或 .env 中补齐。' : '',
+    importable: apiKeyStatus !== 'missing',
+    warning: apiKeyStatus === 'missing' ? '未在当前进程环境中检测到对应 API Key 环境变量。请先在 OpenClaw env 或 .env 中补齐后再导入。' : '',
   })
 }
 
@@ -8609,7 +8806,7 @@ function scanModelClientConfigs() {
         ? 'ChatGPT/Codex OAuth 令牌不会导入到 OpenClaw。请优先使用 Hermes 的 openai-codex 登录。'
         : (apiKeyStatus === 'none'
           ? 'Codex 配置没有声明可安全引用的 env_key，无法自动导入 API Key。请在 Codex 配置中添加 env_key，或在 OpenClaw 中手动配置服务商密钥。'
-          : (apiKeyStatus === 'missing' ? '未在当前进程环境中检测到 Codex 配置引用的 API Key 环境变量，导入后需要在 OpenClaw env 或 .env 中补齐。' : ''))
+          : (apiKeyStatus === 'missing' ? '未在当前进程环境中检测到 Codex 配置引用的 API Key 环境变量。请先在 OpenClaw env 或 .env 中补齐后再导入。' : ''))
       _pushClientCandidate(candidates, {
         id: 'codex-cli',
         source: 'Codex CLI',
@@ -8621,7 +8818,7 @@ function scanModelClientConfigs() {
         apiKey: envKey ? `\${${envKey}}` : '',
         apiKeyStatus,
         models: [model],
-        importable: !isExternalCodex && apiKeyStatus !== 'none',
+        importable: !isExternalCodex && apiKeyStatus !== 'none' && apiKeyStatus !== 'missing',
         authHint: isExternalCodex ? 'hermes auth login openai-codex' : '',
         warning,
       })
@@ -11442,6 +11639,14 @@ const handlers = {
     const npmBin = isWindows ? 'npm.cmd' : 'npm'
     const registry = pickRegistryForPackage(pkg)
     const logs = []
+    const activeCliBefore = resolveOpenclawCliPath()
+    const currentVersionBefore = getLocalOpenclawVersion()
+    const installationsBefore = scanAllOpenclawInstallations(activeCliBefore)
+    logs.push('升级前扫描当前 OpenClaw 安装...')
+    logs.push(`当前使用: ${activeCliBefore || '未检测到 openclaw CLI'}${currentVersionBefore ? ` (${currentVersionBefore})` : ''}`)
+    if (installationsBefore.length > 1) {
+      logs.push(`检测到 ${installationsBefore.length} 个 OpenClaw 安装；升级成功后会切换到新版，旧安装不会自动删除。`)
+    }
 
     // ── standalone 安装（auto / standalone-r2 / standalone-github） ──
     const tryStandalone = source !== 'official' && ['auto', 'standalone-r2', 'standalone-github'].includes(method)
@@ -11519,7 +11724,30 @@ const handlers = {
       if (needUninstallOld) {
         try { execSync(`${npmBin} uninstall -g ${oldPkg} 2>&1`, { timeout: 60000, windowsHide: true }) } catch {}
       }
-      logs.push(`安装完成 (${pkg}@${ver})`)
+
+      if (needUninstallOld) {
+        logs.push('正在修复 npm CLI 入口（避免旧包卸载删除 openclaw.cmd）...')
+        try {
+          runInstall(registry)
+          logs.push('npm CLI 入口已确认')
+        } catch (e) {
+          throw new Error(`安装完成但修复 npm CLI 入口失败: ${e.stderr?.toString() || e.message || e}`)
+        }
+      }
+
+      const npmCli = npmOpenclawCliPath()
+      const installedVersion = npmCli
+        ? (readVersionFromInstallation(npmCli) || getLocalOpenclawVersion())
+        : getLocalOpenclawVersion()
+      if (!npmCli || !installedVersion) {
+        throw new Error(`安装完成但无法读取 OpenClaw 版本${npmCli ? `: ${npmCli}` : ''}`)
+      }
+      if (ver !== 'latest' && !versionsMatch(installedVersion, ver)) {
+        throw new Error(`安装校验失败：目标 CLI 版本为 ${installedVersion}，期望版本为 ${ver}`)
+      }
+      bindOpenclawCliPath(npmCli)
+      logs.push(`已切换当前 CLI: ${npmCli} (${installedVersion})`)
+      logs.push(`安装完成 (${pkg}@${installedVersion})`)
       return `${logs.join('\n')}\n${out.slice(-400)}`
     } catch (e) {
       throw new Error('安装失败: ' + (e.stderr?.toString() || e.message).slice(-300))
@@ -11658,11 +11886,11 @@ const handlers = {
     if (fs.existsSync(PAIRED_PATH)) paired = JSON.parse(fs.readFileSync(PAIRED_PATH, 'utf8'))
     const platform = process.platform === 'darwin' ? 'macos' : process.platform
     if (paired[deviceId]) {
-      if (paired[deviceId].platform !== platform) {
-        paired[deviceId].platform = platform
-        paired[deviceId].deviceFamily = 'desktop'
+      const normalized = normalizeControlUiPairingEntry(paired[deviceId], deviceId, publicKey, platform)
+      if (normalized.changed) {
+        paired[deviceId] = normalized.entry
         fs.writeFileSync(PAIRED_PATH, JSON.stringify(paired, null, 2))
-        return { message: '设备已配对（已修正平台字段）', changed: true }
+        return { message: '设备已配对（已修正权限字段）', changed: true }
       }
       return { message: '设备已配对', changed: originsChanged }
     }
@@ -11671,7 +11899,15 @@ const handlers = {
       deviceId, publicKey, platform, deviceFamily: 'desktop',
       clientId: 'openclaw-control-ui', clientMode: 'ui',
       role: 'operator', roles: ['operator'],
-      scopes: SCOPES, approvedScopes: SCOPES, tokens: {},
+      scopes: SCOPES, approvedScopes: SCOPES,
+      tokens: {
+        operator: {
+          token: generatePairingToken(),
+          role: 'operator',
+          scopes: SCOPES,
+          createdAtMs: nowMs,
+        },
+      },
       createdAtMs: nowMs, approvedAtMs: nowMs,
     }
     fs.writeFileSync(PAIRED_PATH, JSON.stringify(paired, null, 2))
@@ -11988,28 +12224,7 @@ const handlers = {
   },
 
   write_panel_config({ config }) {
-    const nextConfig = config && typeof config === 'object' ? { ...config } : {}
-    if (typeof nextConfig.openclawDir === 'string') {
-      const trimmed = nextConfig.openclawDir.trim()
-      if (trimmed) nextConfig.openclawDir = trimmed
-      else delete nextConfig.openclawDir
-    } else if (nextConfig.openclawDir == null) {
-      delete nextConfig.openclawDir
-    }
-    for (const key of ['dockerEndpoint', 'dockerDefaultImage']) {
-      if (typeof nextConfig[key] === 'string') {
-        const trimmed = nextConfig[key].trim()
-        if (trimmed) nextConfig[key] = trimmed
-        else delete nextConfig[key]
-      } else if (nextConfig[key] == null) {
-        delete nextConfig[key]
-      }
-    }
-    const panelDir = path.dirname(PANEL_CONFIG_PATH)
-    if (!fs.existsSync(panelDir)) fs.mkdirSync(panelDir, { recursive: true })
-    fs.writeFileSync(PANEL_CONFIG_PATH, JSON.stringify(nextConfig, null, 2))
-    invalidateConfigCache()
-    applyOpenclawPathConfig(nextConfig)
+    writePanelConfigFile(config)
     return true
   },
 

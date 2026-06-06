@@ -592,6 +592,7 @@ async function doInstall(page, title, source, version) {
       unlistenDone = await listen('upgrade-done', (e) => {
         cleanup()
         modal.setDone(typeof e.payload === 'string' ? e.payload : t('about.operationDone'))
+        loadData(page)
       })
 
       unlistenError = await listen('upgrade-error', async (e) => {
@@ -617,6 +618,8 @@ async function doInstall(page, title, source, version) {
       const msg = await api.upgradeOpenclaw(source, version)
       modal.setDone(typeof msg === 'string' ? msg : (msg?.message || t('about.operationDone')))
       cleanup()
+      window.dispatchEvent(new CustomEvent('openclaw:runtime-changed'))
+      loadData(page)
     }
   } catch (e) {
     cleanup()

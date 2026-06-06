@@ -1260,7 +1260,17 @@ async function connectGateway() {
     const gw = config?.gateway || {}
     const host = isTauriRuntime() ? `127.0.0.1:${gw.port || 18789}` : location.host
     const token = gw.auth?.token || gw.authToken || ''
-    wsClient.connect(host, token)
+    const password = typeof gw.auth?.password === 'string' ? gw.auth.password : ''
+
+    // 聊天页可能比 main.js 的全局自动连接更早发起 WS。
+    // 新机器首次启动时，如果这里直接连接，Gateway 会在配对字段生效前拒绝 operator 角色。
+    try {
+      await api.autoPairDevice()
+    } catch (pairErr) {
+      console.warn('[chat] autoPairDevice 失败（非致命）:', pairErr)
+    }
+
+    wsClient.connect(host, token, { password })
   } catch (e) {
     toast(`${t('common.loadFailed')}: ${e.message}`, 'error')
   }
