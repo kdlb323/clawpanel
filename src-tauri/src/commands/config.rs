@@ -7390,7 +7390,6 @@ pub async fn auto_install_git(app: tauri::AppHandle) -> Result<String, String> {
 /// 尝试自动安装或升级 Node.js LTS
 #[tauri::command]
 pub async fn auto_install_node(app: tauri::AppHandle) -> Result<String, String> {
-    use std::process::Stdio;
     use tauri::Emitter;
 
     let _ = app.emit("upgrade-log", "正在尝试安装或升级 Node.js LTS...");
@@ -7398,6 +7397,7 @@ pub async fn auto_install_node(app: tauri::AppHandle) -> Result<String, String> 
     #[cfg(target_os = "windows")]
     {
         use std::io::{BufRead, BufReader};
+        use std::process::Stdio;
 
         let run_winget = |mode: &str| -> Result<std::process::Child, String> {
             let mut args = vec![
