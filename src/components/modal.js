@@ -349,6 +349,9 @@ export function showUpgradeModal(title) {
       }
       closeBtn.focus()
     },
+    setCloseText(label) {
+      if (label) closeBtn.textContent = label
+    },
     onClose(fn) { _onClose = fn },
     destroy() { overlay.remove(); if (_taskBar) { _taskBar.remove(); _taskBar = null } _onClose?.() },
   }

@@ -630,6 +630,114 @@ function readVersionFromInstallation(cliPath) {
   return null
 }
 
+function findOpenclawPackageJson(cliPath) {
+  const resolved = canonicalCliPath(cliPath)
+  if (!resolved || !fs.existsSync(resolved)) return null
+  const dir = path.dirname(resolved)
+  const ownPackageCandidates = []
+  let current = dir
+  while (current && current !== path.dirname(current)) {
+    ownPackageCandidates.push(path.join(current, 'package.json'))
+    current = path.dirname(current)
+  }
+  for (const pkgPath of ownPackageCandidates) {
+    try {
+      if (!fs.existsSync(pkgPath)) continue
+      const name = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))?.name
+      if (name === 'openclaw' || name === '@qingchencloud/openclaw-zh') return pkgPath
+    } catch {}
+  }
+
+  const cliSource = classifyCliSource(resolved)
+  const pkgNames = (cliSource === 'standalone' || cliSource === 'npm-zh')
+    ? [path.join('@qingchencloud', 'openclaw-zh'), 'openclaw']
+    : ['openclaw', path.join('@qingchencloud', 'openclaw-zh')]
+  const bases = [dir, path.dirname(dir)].filter(Boolean)
+  for (const base of bases) {
+    for (const pkgName of pkgNames) {
+      const pkgPath = path.join(base, 'node_modules', pkgName, 'package.json')
+      if (fs.existsSync(pkgPath)) return pkgPath
+    }
+  }
+  return null
+}
+
+function openclawNodeRequirement() {
+  const cliPath = resolveOpenclawCliPath()
+  const pkgPath = cliPath ? findOpenclawPackageJson(cliPath) : null
+  if (!pkgPath) return null
+  try {
+    const requirement = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))?.engines?.node
+    return typeof requirement === 'string' && requirement.trim() ? requirement.trim() : null
+  } catch {
+    return null
+  }
+}
+
+function parseNodeVersionTriplet(value) {
+  const match = String(value || '').match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/)
+  if (!match) return null
+  return [Number(match[1] || 0), Number(match[2] || 0), Number(match[3] || 0)]
+}
+
+function compareVersionTriplet(left, right) {
+  for (let i = 0; i < 3; i++) {
+    if ((left[i] || 0) > (right[i] || 0)) return 1
+    if ((left[i] || 0) < (right[i] || 0)) return -1
+  }
+  return 0
+}
+
+function nodeVersionSatisfiesClause(version, clause) {
+  const raw = String(clause || '').trim()
+  if (!raw || raw === '*') return true
+  if (raw.startsWith('>=')) {
+    const min = parseNodeVersionTriplet(raw.slice(2))
+    return !!min && compareVersionTriplet(version, min) >= 0
+  }
+  if (raw.startsWith('>')) {
+    const min = parseNodeVersionTriplet(raw.slice(1))
+    return !!min && compareVersionTriplet(version, min) > 0
+  }
+  if (raw.startsWith('^')) {
+    const min = parseNodeVersionTriplet(raw.slice(1))
+    if (!min) return false
+    const max = [min[0] + 1, 0, 0]
+    return compareVersionTriplet(version, min) >= 0 && compareVersionTriplet(version, max) < 0
+  }
+  const target = parseNodeVersionTriplet(raw)
+  return !!target && compareVersionTriplet(version, target) === 0
+}
+
+function nodeVersionSatisfiesRequirement(versionText, requirementText) {
+  const version = parseNodeVersionTriplet(versionText)
+  if (!version) return false
+  const requirement = String(requirementText || '').trim()
+  if (!requirement) return true
+  return requirement.split('||').some(range =>
+    range.trim().split(/\s+/).filter(Boolean).every(clause => nodeVersionSatisfiesClause(version, clause))
+  )
+}
+
+function decorateNodeDetection(base) {
+  const requirement = openclawNodeRequirement()
+  const installed = !!base?.installed
+  const compatible = installed && requirement ? nodeVersionSatisfiesRequirement(base.version, requirement) : installed && !requirement
+  return {
+    ...base,
+    compatible,
+    requiredVersion: requirement,
+  }
+}
+
+function ensureNodeRuntimeCompatibleWeb() {
+  const node = handlers.check_node()
+  if (!node.installed) throw new Error('Node.js 未安装或未检测到，请先安装 Node.js 后重新检测')
+  if (node.compatible === false) {
+    throw new Error(`Node.js 版本过低：当前检测到 ${node.version || 'unknown'}，当前 OpenClaw 要求 ${node.requiredVersion || '当前 OpenClaw 要求的版本'}。请升级 Node.js 后重新检测。检测路径：${node.path || ''}`)
+  }
+}
+
 function readWhereWhichOpenclawCandidates() {
   try {
     const cmd = isWindows ? 'where openclaw' : 'which -a openclaw 2>/dev/null'
@@ -9012,6 +9120,7 @@ const handlers = {
       writeGatewayOwner(status.pid || null)
       return true
     }
+    ensureNodeRuntimeCompatibleWeb()
     if (isMac) {
       macStartService(label)
       await waitForGatewayRunning(label)
@@ -10743,9 +10852,9 @@ const handlers = {
   check_node() {
     try {
       const ver = execSync('node --version 2>&1', { windowsHide: true }).toString().trim()
-      return { installed: true, version: ver, path: findCommandPath('node') }
+      return decorateNodeDetection({ installed: true, version: ver, path: findCommandPath('node') })
     } catch {
-      return { installed: false, version: null, path: null }
+      return decorateNodeDetection({ installed: false, version: null, path: null })
     }
   },
 
@@ -12351,7 +12460,7 @@ const handlers = {
     if (!fs.existsSync(nodeBin)) throw new Error(`未在 ${nodeDir} 找到 node`)
     try {
       const ver = execSync(`"${nodeBin}" --version 2>&1`, { timeout: 5000, windowsHide: true }).toString().trim()
-      return { installed: true, version: ver, path: nodeBin }
+      return decorateNodeDetection({ installed: true, version: ver, path: nodeBin })
     } catch (e) {
       throw new Error('node 检测失败: ' + e.message)
     }
@@ -12367,7 +12476,7 @@ const handlers = {
       if (fs.existsSync(nodeBin)) {
         try {
           const ver = execSync(`"${nodeBin}" --version 2>&1`, { timeout: 5000, windowsHide: true }).toString().trim()
-          results.push({ path: p, version: ver })
+          results.push(decorateNodeDetection({ installed: true, path: nodeBin, dir: p, version: ver }))
         } catch {}
       }
     }
@@ -12413,6 +12522,11 @@ const handlers = {
   },
 
   save_custom_node_path({ nodeDir }) {
+    const detected = handlers.check_node_at_path({ nodeDir })
+    if (!detected.installed) throw new Error('该目录下未找到 node 可执行文件，请确认路径正确。')
+    if (detected.compatible === false) {
+      throw new Error(`Node.js 版本过低：当前 ${detected.version || 'unknown'}，要求 ${detected.requiredVersion || '当前 OpenClaw 要求的版本'}。请升级 Node.js 后再使用该路径。`)
+    }
     const cfg = readPanelConfig()
     cfg.customNodePath = nodeDir
     if (!fs.existsSync(OPENCLAW_DIR)) fs.mkdirSync(OPENCLAW_DIR, { recursive: true })

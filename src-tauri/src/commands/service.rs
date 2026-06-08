@@ -985,6 +985,8 @@ mod platform {
 
     /// launchctl 失败时的回退：直接通过 CLI spawn Gateway 进程
     fn start_gateway_direct() -> Result<(), String> {
+        crate::commands::config::ensure_node_runtime_compatible()?;
+
         // 启动前再次检查端口（防止 launchctl→direct 回退链路中重复拉起）
         let port = crate::commands::gateway_listen_port();
         if let Ok(addr) = format!("127.0.0.1:{port}").parse::<std::net::SocketAddr>() {
@@ -1049,6 +1051,8 @@ mod platform {
     }
 
     pub fn start_service_impl(label: &str) -> Result<(), String> {
+        crate::commands::config::ensure_node_runtime_compatible()?;
+
         // 启动前检查端口是否已被占用，防止重复拉起导致端口冲突和内存浪费
         let port = crate::commands::gateway_listen_port();
         let pre_check_addr: std::net::SocketAddr = format!("127.0.0.1:{port}")
@@ -1137,6 +1141,8 @@ mod platform {
 
     #[allow(dead_code)]
     pub fn restart_service_impl(label: &str) -> Result<(), String> {
+        crate::commands::config::ensure_node_runtime_compatible()?;
+
         let uid = current_uid()?;
         let path = plist_path(label);
         let domain_target = format!("gui/{}", uid);

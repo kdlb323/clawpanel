@@ -922,9 +922,9 @@ function getOnboardingSteps({ gw, config, agents, channels }) {
   // 步骤 2：至少配了一个 provider 且非空
   const providers = config?.models?.providers || {}
   const hasModel = Object.keys(providers).length > 0
-  // 步骤 3：自定义 Agent（默认 main 不算）
+  // 步骤 3：默认 main Agent 已经可用时无需再创建新 Agent。
   const agentList = Array.isArray(agents) ? agents : []
-  const hasCustomAgent = agentList.some(a => a && a.id && a.id !== 'main')
+  const hasAgent = agentList.some(a => a && (a.id || a.name))
   // 步骤 4：渠道接入（不是必须，但作为「已开始用」的标志）
   // 实际上更好的判定是「点过聊天页 / 发过一条消息」，但目前没记录，先用 channels 数量作为可选完成判据
   // 改为：把第 4 步定义为「尝试聊天」—— 不强校验，CTA 触发跳转即可（用户点了就当完成）
@@ -934,7 +934,7 @@ function getOnboardingSteps({ gw, config, agents, channels }) {
   return [
     { id: 'gateway', titleKey: 'onboardingStep1Title', descKey: 'onboardingStep1Desc', ctaKey: 'onboardingStep1Cta', route: '/services', done: gwRunning },
     { id: 'model', titleKey: 'onboardingStep2Title', descKey: 'onboardingStep2Desc', ctaKey: 'onboardingStep2Cta', route: '/models', done: hasModel },
-    { id: 'agent', titleKey: 'onboardingStep3Title', descKey: 'onboardingStep3Desc', ctaKey: 'onboardingStep3Cta', route: '/agents', done: hasCustomAgent },
+    { id: 'agent', titleKey: 'onboardingStep3Title', descKey: 'onboardingStep3Desc', ctaKey: 'onboardingStep3Cta', route: '/agents', done: hasAgent },
     { id: 'chat', titleKey: 'onboardingStep4Title', descKey: 'onboardingStep4Desc', ctaKey: 'onboardingStep4Cta', route: '/chat', done: hasChatTried, markOnClick: 'clawpanel_onboarding_chat_clicked' },
   ]
 }

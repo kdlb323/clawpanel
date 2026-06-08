@@ -54,8 +54,34 @@ function isWindowsPlatform() {
   return navigator.platform?.startsWith('Win') || navigator.userAgent?.includes('Windows')
 }
 
+function isLinuxPlatform() {
+  return navigator.platform?.toLowerCase().includes('linux') || navigator.userAgent?.toLowerCase().includes('linux')
+}
+
 function canAutoUpgradeNode() {
   return isTauriRuntime() && isWindowsPlatform()
+}
+
+function nodeRuntimeHint(nodeTooOld) {
+  if (!nodeTooOld) return t('setup.winNodeHint')
+  if (isWindowsPlatform()) return t('setup.winNodeUpgradeHint')
+  if (isMacPlatform()) return t('setup.macNodeUpgradeHint')
+  if (isLinuxPlatform()) return t('setup.linuxNodeUpgradeHint')
+  return t('setup.genericNodeUpgradeHint')
+}
+
+function nodePathPlaceholder() {
+  if (isMacPlatform()) return '/usr/local/bin'
+  if (isLinuxPlatform()) return '/usr/bin'
+  return 'F:\\AI\\Node'
+}
+
+function normalizeNodeUpgradeLog(line) {
+  const text = String(line || '').trimEnd()
+  if (!text.trim()) return null
+  if (/[█▓▒░]/.test(text)) return null
+  if (/^[\s\\|/\-]+$/.test(text)) return null
+  return text
 }
 
 function renderDetectionHint(pathValue, sourceLabel = '') {
@@ -297,16 +323,16 @@ function renderSteps(page, { node, git, cliOk, config, version }) {
         <div style="margin-top:var(--space-sm);padding:10px 12px;background:var(--bg-tertiary);border-radius:var(--radius-sm);font-size:var(--font-size-xs);color:var(--text-secondary);line-height:1.6">
           <strong>${nodeTooOld ? t('setup.nodeUnsupportedTitle') : t('setup.nodeInstalledButNotDetected')}</strong>
           ${isMacPlatform()
-            ? `${t('setup.macNodeHint')}<br>
+            ? `${nodeTooOld ? t('setup.macNodeUpgradeHint') : t('setup.macNodeHint')}<br>
                <code style="background:var(--bg-secondary);padding:2px 6px;border-radius:3px;user-select:all">open /Applications/ClawPanel.app</code>`
-            : `${nodeTooOld ? t('setup.winNodeUpgradeHint') : t('setup.winNodeHint')}`
+            : `${nodeRuntimeHint(nodeTooOld)}`
           }
           <div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
             <button class="btn btn-secondary btn-sm" id="btn-scan-node" style="font-size:11px;padding:3px 10px">${icon('search', 12)} ${t('setup.scanNodeBtn')}</button>
             <span style="color:var(--text-tertiary)">${t('setup.orManualPath')}</span>
           </div>
           <div class="setup-input-row" style="margin-top:6px">
-            <input id="input-node-path" type="text" placeholder="${isMacPlatform() ? '/usr/local/bin' : 'F:\\AI\\Node'}"
+            <input id="input-node-path" type="text" placeholder="${nodePathPlaceholder()}"
               style="flex:1;padding:4px 8px;border:1px solid var(--border-primary);border-radius:var(--radius-sm);background:var(--bg-secondary);color:var(--text-primary);font-size:11px;font-family:monospace">
             <button class="btn btn-primary btn-sm" id="btn-check-path" style="font-size:11px;padding:3px 10px">${t('setup.checkPathBtn')}</button>
           </div>
@@ -718,12 +744,17 @@ function bindEvents(page, nodeOk, detectState) {
     btn.disabled = true
     btn.textContent = t('setup.upgradingNode')
     try {
-      unlistenLog = await safeTauriListen('upgrade-log', (e) => modal.appendLog(e.payload))
+      unlistenLog = await safeTauriListen('upgrade-log', (e) => {
+        const line = normalizeNodeUpgradeLog(e.payload)
+        if (line) modal.appendLog(line)
+      })
       unlistenProgress = await safeTauriListen('upgrade-progress', (e) => modal.setProgress(e.payload))
       const msg = await api.autoInstallNode()
       modal.setProgress(100)
       modal.setDone(msg || t('setup.nodeUpgradeSuccess'))
+      modal.setCloseText(t('common.completed'))
       modal.appendLog(t('setup.nodeUpgradeRedetecting'))
+      modal.appendLog(t('setup.nodeUpgradeStartGatewayHint'))
       toast(msg || t('setup.nodeUpgradeSuccess'), 'success')
       await api.invalidatePathCache().catch(() => {})
       setTimeout(() => runDetect(page), 800)
