@@ -17261,34 +17261,64 @@ const FS_MAX_LIST_ENTRIES: usize = 2000; // 单次最多返回 2000 条
 /// 验证路径在 hermes_home 子树内（防 path traversal）。
 /// 返回安全的绝对路径，或 Err。
 fn validate_hermes_fs_path(rel_path: &str) -> Result<PathBuf, String> {
-    let root = hermes_home();
-    // 空 = 根目录
-    let target = if rel_path.is_empty() {
-        root.clone()
-    } else {
-        // 拒绝绝对路径输入（必须相对于 hermes_home）
-        let p = std::path::Path::new(rel_path);
-        if p.is_absolute() {
-            // 允许绝对路径，但必须以 root 开头（用 starts_with 检查）
-            let canonical_root = root.canonicalize().unwrap_or(root.clone());
-            let canonical_target = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-            if !canonical_target.starts_with(&canonical_root) {
-                return Err(format!("路径必须在 {} 子树内", root.to_string_lossy()));
-            }
-            canonical_target
-        } else {
-            // 相对路径：拼到 root 下，再 canonicalize 防 ..
-            let joined = root.join(p);
-            // 父目录必须存在才能 canonicalize；对不存在的新文件 fallback 到 joined
-            let canon = joined.canonicalize().unwrap_or(joined.clone());
-            let canonical_root = root.canonicalize().unwrap_or(root.clone());
+    validate_hermes_fs_path_under(&hermes_home(), rel_path)
+}
+
+fn validate_hermes_fs_path_under(root: &std::path::Path, rel_path: &str) -> Result<PathBuf, String> {
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| format!("Hermes 目录不存在: {e}"))?;
+
+    if rel_path.is_empty() {
+        return Ok(canonical_root);
+    }
+
+    let p = std::path::Path::new(rel_path);
+    if p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("路径不能包含 ..".into());
+    }
+
+    if p.is_absolute() {
+        let canonical_target = p
+            .canonicalize()
+            .map_err(|e| format!("路径无效: {e}"))?;
+        if !canonical_target.starts_with(&canonical_root) {
+            return Err(format!("路径必须在 {} 子树内", root.to_string_lossy()));
+        }
+        return Ok(canonical_target);
+    }
+
+    let joined = canonical_root.join(p);
+    if joined.exists() {
+        let canon = joined
+            .canonicalize()
+            .map_err(|e| format!("路径无效: {e}"))?;
+        if !canon.starts_with(&canonical_root) {
+            return Err(format!("路径不能跳出 {} 目录", root.to_string_lossy()));
+        }
+        return Ok(canon);
+    }
+
+    // 新文件：沿已存在祖先目录 canonicalize，避免非规范化路径绕过 starts_with。
+    let mut ancestor = joined.clone();
+    while ancestor.pop() {
+        if ancestor.starts_with(&canonical_root) && ancestor.exists() {
+            let canon = ancestor
+                .canonicalize()
+                .map_err(|e| format!("路径无效: {e}"))?;
             if !canon.starts_with(&canonical_root) {
                 return Err(format!("路径不能跳出 {} 目录", root.to_string_lossy()));
             }
-            canon
+            return Ok(joined);
         }
-    };
-    Ok(target)
+    }
+
+    if !joined.starts_with(&canonical_root) {
+        return Err(format!("路径不能跳出 {} 目录", root.to_string_lossy()));
+    }
+    Ok(joined)
 }
 
 #[tauri::command]
@@ -25360,5 +25390,50 @@ platforms:
         )
         .unwrap_err();
         assert!(err.contains("display.platforms.telegram.streaming"));
+    }
+}
+
+#[cfg(test)]
+mod hermes_fs_path_tests {
+    use super::validate_hermes_fs_path_under;
+
+    #[test]
+    fn rejects_parent_dir_segments() {
+        let root = std::env::temp_dir().join(format!(
+            "hermes-fs-path-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = root.parent().unwrap().join("outside-secret.txt");
+        std::fs::write(&outside, "SECRET").unwrap();
+
+        let err = validate_hermes_fs_path_under(&root, "../outside-secret.txt")
+            .expect_err("path traversal should be rejected");
+        assert!(err.contains(".."));
+
+        let _ = std::fs::remove_file(outside);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn allows_new_file_under_root() {
+        let root = std::env::temp_dir().join(format!(
+            "hermes-fs-path-new-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let resolved =
+            validate_hermes_fs_path_under(&root, "notes/new.txt").expect("valid nested path");
+        assert!(resolved.starts_with(root.canonicalize().unwrap()));
+        assert_eq!(resolved.file_name().and_then(|n| n.to_str()), Some("new.txt"));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }
