@@ -17261,33 +17261,56 @@ const FS_MAX_LIST_ENTRIES: usize = 2000; // 单次最多返回 2000 条
 /// 返回安全的绝对路径，或 Err。
 fn validate_hermes_fs_path(rel_path: &str) -> Result<PathBuf, String> {
     let root = hermes_home();
-    // 空 = 根目录
-    let target = if rel_path.is_empty() {
-        root.clone()
+    validate_hermes_fs_path_under(&root, rel_path)
+}
+
+fn validate_hermes_fs_path_under(
+    root: &std::path::Path,
+    rel_path: &str,
+) -> Result<PathBuf, String> {
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| format!("Hermes 目录不存在: {e}"))?;
+    if rel_path.trim().is_empty() {
+        return Ok(canonical_root);
+    }
+
+    let p = std::path::Path::new(rel_path);
+    if p.components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("路径不能包含 ..".into());
+    }
+
+    let target = if p.is_absolute() {
+        p.to_path_buf()
     } else {
-        // 拒绝绝对路径输入（必须相对于 hermes_home）
-        let p = std::path::Path::new(rel_path);
-        if p.is_absolute() {
-            // 允许绝对路径，但必须以 root 开头（用 starts_with 检查）
-            let canonical_root = root.canonicalize().unwrap_or(root.clone());
-            let canonical_target = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-            if !canonical_target.starts_with(&canonical_root) {
-                return Err(format!("路径必须在 {} 子树内", root.to_string_lossy()));
-            }
-            canonical_target
-        } else {
-            // 相对路径：拼到 root 下，再 canonicalize 防 ..
-            let joined = root.join(p);
-            // 父目录必须存在才能 canonicalize；对不存在的新文件 fallback 到 joined
-            let canon = joined.canonicalize().unwrap_or(joined.clone());
-            let canonical_root = root.canonicalize().unwrap_or(root.clone());
-            if !canon.starts_with(&canonical_root) {
-                return Err(format!("路径不能跳出 {} 目录", root.to_string_lossy()));
-            }
-            canon
-        }
+        canonical_root.join(p)
     };
-    Ok(target)
+    let canonical_target = if target.exists() {
+        target
+            .canonicalize()
+            .map_err(|e| format!("解析路径失败: {e}"))?
+    } else {
+        let parent = target
+            .parent()
+            .ok_or_else(|| "路径缺少父目录".to_string())?;
+        let canonical_parent = parent
+            .canonicalize()
+            .map_err(|e| format!("父目录不存在或不可访问: {e}"))?;
+        let Some(name) = target.file_name() else {
+            return Err("路径缺少文件名".into());
+        };
+        canonical_parent.join(name)
+    };
+
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err(format!(
+            "路径不能跳出 {} 目录",
+            canonical_root.to_string_lossy()
+        ));
+    }
+    Ok(canonical_target)
 }
 
 #[tauri::command]
@@ -17437,6 +17460,44 @@ pub async fn hermes_fs_write(path: String, content: String) -> Result<Value, Str
         "path": target.to_string_lossy(),
         "size": meta.map(|m| m.len()).unwrap_or(0),
     }))
+}
+
+#[cfg(test)]
+mod hermes_fs_path_tests {
+    use super::validate_hermes_fs_path_under;
+
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn rejects_parent_dir_segments() {
+        let root = unique_temp_dir("hermes-fs-path");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let err = validate_hermes_fs_path_under(&root, "../outside.txt").unwrap_err();
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(err.contains(".."));
+    }
+
+    #[test]
+    fn allows_new_file_under_root() {
+        let root = unique_temp_dir("hermes-fs-path-new");
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+
+        let target = validate_hermes_fs_path_under(&root, "notes/new.md").unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(target.ends_with(std::path::Path::new("notes").join("new.md")));
+    }
 }
 
 // ============================================================================

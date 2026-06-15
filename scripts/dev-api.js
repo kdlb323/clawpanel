@@ -2441,11 +2441,13 @@ function calibrationRichnessScore(config) {
   return score
 }
 
-function selectCalibrationSource(current, backup) {
+export function selectCalibrationSource(current, backup) {
   if (current && backup) {
-    return calibrationRichnessScore(backup) > calibrationRichnessScore(current)
-      ? ['backup', backup]
-      : ['current', current]
+    const currentScore = calibrationRichnessScore(current)
+    if (currentScore === 0 && calibrationRichnessScore(backup) > 0) {
+      return ['backup', backup]
+    }
+    return ['current', current]
   }
   if (current) return ['current', current]
   if (backup) return ['backup', backup]
